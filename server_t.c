@@ -259,10 +259,10 @@ void *job_thread(void* vargp){
 
         /* declare message header for receiving via petr protocol */
 
-        // printf("job_thread: item.msg is %s\n", item.msg);
-        // printf("job_thread: item.client_fd is %d\n", item.client_fd);
-        // printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
-        // printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
+        printf("job_thread: item.msg is %s\n", item.msg);
+        printf("job_thread: item.client_fd is %d\n", item.client_fd);
+        printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
+        printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
 
 
         /* declare mssage header for sending via petr protocaol */
@@ -298,9 +298,11 @@ void *job_thread(void* vargp){
             node_t* current = rooms_list.head;
             while(current != NULL){
                 // if the room name already exists in rooms_list
-                if(strcmp(item.msg, (*(chat_room*)(current->value)).room_name) == 0){
+                if(strcmp(item.msg, ((chat_room*)(current->value))->room_name) == 0){
                    // sending to client error ERMEXISTS: Room exists already
-
+                   send_header.msg_len = 0;
+                   send_header.msg_type = ERMEXISTS;
+                   wr_msg(item.client_fd, &send_header, NULL); 
                    roomexist = 1;
                    break;
                 }
@@ -311,20 +313,33 @@ void *job_thread(void* vargp){
                and create a new linked list for the participants
              */
             if(roomexist == 0){
+
+                P(&rooms_mutex);
+
+                /* create new strings and new spaces in the memory
+                   so the strings won't get overwritten
+                 */
+                char* room_name = malloc(1000);
+                strcpy(room_name, item.msg);
+
                 char* user = find_name_by_fd(&users_list, item.client_fd);
+                char* user_name = malloc(1000);
+                strcpy(user_name, user);
+
+                int user_fd = item.client_fd;
 
                 // create new linked list for the partcipants in the room
-                List_t participants;
+                List_t* participants = malloc(sizeof(List_t));
                 // add the creater to the linked list
-                insertRear(&participants, (void*)user, item.client_fd);
+                insertRear(participants, (void*)user_name, user_fd);
 
                 // create and initialize new chat_room
-                chat_room new_room;
-                new_room.room_name = item.msg;
-                new_room.room_creater = user;
-                new_room.participants = participants;
+                chat_room* new_room = malloc(sizeof(chat_room));
+                new_room->room_name = room_name;
+                new_room->room_creater = user_name;
+                new_room->participants = participants;
                 // add the new chat_room to the rooms_list linked list
-                insertRear(&rooms_list, (void*)&new_room, -1);
+                insertRear(&rooms_list, (void*)new_room, -1);
 
                 // sending to client "OK" when successfully create room
                 send_header.msg_len = 0;
@@ -336,8 +351,17 @@ void *job_thread(void* vargp){
                 while(current != NULL){
                     printf("room_name: %s\n", ((chat_room*)(current->value))->room_name);
                     printf("room_creater: %s\n", ((chat_room*)(current->value))->room_creater);
+                    node_t* participant = ((chat_room*)(current->value))->participants->head;
+                    // (testing) priting all participants in the room
+                    // while(participant != NULL){
+                    //     printf("partcipant: %s\n", (char*)(participant->value));
+                    //     participant = participant->next;
+                    // }
                     current = current->next;
                 }
+
+                V(&rooms_mutex);
+
             }
 
             continue;
