@@ -73,7 +73,8 @@ void deleteList(List_t* list);
 void printList(List_t* list, char mode);
 
 
-/* find fd by name */
+/* find fd by name, find name by fd*/
 int find_fd_by_name(List_t* list, char* name);
+char* find_name_by_fd(List_t* list, int fd);
 
 #endif

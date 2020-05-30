@@ -74,6 +74,7 @@ void printList(List_t* list, char mode);
 
 /* find fd by name */
 int find_fd_by_name(List_t* list, char* name);
+char* find_name_by_fd(List_t* list, int fd);
 
 #endif
 /*
@@ -122,8 +123,22 @@ int find_fd_by_name(List_t* list, char* name){
             return ptr->fd;
         }
     }
-    printf("fd not found in the list\n");
-    return 0;
+    printf("find_fd_by_name function: fd not found in the list\n");
+    return -1;
+}
+
+char* find_name_by_fd(List_t* list, int fd){
+    node_t* ptr = list->head;
+
+    for(ptr = list->head; ptr != NULL; ptr = ptr->next){
+        if(ptr->fd == fd){
+            printf("found\n");
+            // printf("it's next val is %s\n", ptr->next->value);
+            return ptr->value;
+        }
+    }
+    printf("find_name_by_fd function: name not found in the list\n");
+    return NULL;
 }
 
 void insertFront(List_t* list, void* valref, int fd) {
