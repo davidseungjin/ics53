@@ -458,9 +458,6 @@ void *job_thread(void* vargp){
             //     printf("i c and d is %c \t %d\n", msg[i], msg[i]);
             // }
             wr_msg(from_user_fd, &send_header, msg);
-
-            // bzero(&msg, sizeof(msg));
-            // free(msg);
             // if ok, server returns list of users
             continue;
         }
