@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <getopt.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 #include <semaphore.h>
 #include <pthread.h>
@@ -26,8 +28,7 @@
 typedef struct {
     char* room_name;
     char* room_creater;
-    char* user_list;
-    uint32_t user_count;
+    List_t participants;
 } chat_room;
 
 typedef struct {
