@@ -24,10 +24,15 @@ chat_room roominfo;
 
 /* 3: Audit Log */
 char* audit_log;
+FILE* audit_fp;
 sem_t audit_mutex;
 
 /* 4: JOB BUFFER */
 sbuf_t job_buffer;
+
+/* 5: general purpose?: for check at JOB THREAD */
+sem_t jobjob;
+
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
 void Sem_init(sem_t *sem, int pshared, unsigned int value) {
@@ -46,23 +51,6 @@ void V(sem_t *sem) {
     if (sem_post(sem) < 0)
 	    perror("V error");
 }
-
-/* Write the given string to the audit_log text file.
-   Maybe we can implement more arguments for output?*/
-void audit_write(char* text){
-    P(&audit_mutex);
-    FILE* audit_fp;
-    // Open file
-    if ( (audit_fp = fopen(audit_log, "a")) < 0)
-        perror("Open Audit Log error");
-    // Write to file
-    fprintf(audit_fp, "%ld\t%s\n", time(NULL), text);
-    // Close file
-    if (fclose(audit_fp) < 0)
-        perror("Close Audit Log error");
-    V(&audit_mutex);
-}
-
 
 /* Create an empty, bounded, shared FIFO buffer with n slots.
  * Quoted from textbook
@@ -122,9 +110,20 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 }
 
 
+
+
+/* Handler to clean up in case of "Ctrl-C" */
 void sigint_handler(int sig) {
     printf("shutting down server\n");
+
+    P(&audit_mutex);
+    audit_fp = fopen(audit_log, "a");
+    fprintf(audit_fp, "%ld\tServer terminated due to Ctrl-C", time(NULL));
+    fclose(audit_fp);
+    V(&audit_mutex);
+
     close(listen_fd);
+    sbuf_deinit(&job_buffer);
     exit(0);
 }
 
@@ -244,6 +243,7 @@ void *process_client(void *clientfd_ptr) {
 /* Job thread function*/
 void *job_thread(void* vargp){
     // printf("job_thread is doing, thread ID is %ld\n", pthread_self());
+    Sem_init(&jobjob, 0, 1);
     while(1){
 
         /* Background
@@ -253,32 +253,156 @@ void *job_thread(void* vargp){
          * So, modified sbuf_t. Instead of putting integer, made structure.
          * That contains client_fd, header, msg. By dynamically allocation.
          */
-        header_and_msg item = sbuf_remove(&job_buffer);
+        header_and_msg item = sbuf_remove(&job_buffer);    
 
         /* Once you took client_fd, header, msg... DO SOMETHING !!!!! */
 
         /* declare message header for receiving via petr protocol */
 
-        printf("job_thread: item.msg is %s\n", item.msg);
-        printf("job_thread: item.client_fd is %d\n", item.client_fd);
-        printf("job_thread: item.header.msg_type 0x%x\n", item.header.msg_type);
-        printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
+        // printf("job_thread: item.msg is %s\n", item.msg);
+        // printf("job_thread: item.client_fd is %d\n", item.client_fd);
+        // printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
+        // printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
 
-        /* declare message header for sending via petr protocaol */
+
+        /* declare mssage header for sending via petr protocaol */
         petr_header send_header;
         send_header.msg_len = 0;
         send_header.msg_type = OK;
 
+        petr_header recv1_header;
+        recv1_header.msg_len = 0;
+        recv1_header.msg_type = OK;
+
         /* Later, the message should be customized.
          * It is just for checking xterm window work or not.
-         * According to msg type. Server needs to react differently.
+         * According to msg type. Server needs to react differently. 
          * If server react differently, xterm window will occur accordingly.
          * uncomment out below for testing.
          */
         // wr_msg(item.client_fd, &send_header, NULL);
 
+        
+        // ESERV: generic error 
 
+        if(item.header.msg_type == LOGOUT){
+            
+            continue;
+        }
 
+        if(item.header.msg_type == RMCREATE){
+            // ERMEXISTS: Room exists already
+            
+            
+            continue;
+        }
+        
+        if(item.header.msg_type == RMDELETE){
+            continue;
+        }
+        
+        if(item.header.msg_type == RMLIST){
+            // return list of rooms w/ users per room
+            // <roomname>:<username>,...,<username>\n...
+
+            continue;
+        }
+
+        if(item.header.msg_type == RMDELETE){
+            // ERMNOTFOUND: room does not exist on server
+            // ERMDENIED: anyone except created can not RMDELETE
+
+            // RMCLOSED to client?
+
+            continue;
+        }
+
+        if(item.header.msg_type == RMJOIN){
+            // ERMFULL: room capacity reached
+            // ERMNOTFOUND: room does not exist on server
+            
+            continue;
+        }
+
+        if(item.header.msg_type == RMLEAVE){
+            // ERMNOTFOUND: room does not exist on server
+            // ERMDENIED: room creater can not leave
+            
+            continue;
+        }
+
+        if(item.header.msg_type == RMSEND){
+            // ERMNOTFOUND: room does not exist on server
+            
+            // msg looks like  <roomname>\r\n<message>...
+            // then, from server to clients joined the room
+            // RMRECV: <roomname>\r\n<from_username>\r\n<message>
+
+            continue;
+        }
+
+        if(item.header.msg_type == USRSEND){
+            // EUSRNOTFOUND: user does not exist on server
+            //
+            // then, from server to user who receives
+            // USERRECV: <from_username>\r\n<message>
+
+            int from_user_fd = item.client_fd;
+            char* from_username = find_name_by_fd(&users_list, from_user_fd);
+            printf("from_username and fd are %s, %d\n", from_username, from_user_fd);
+
+            char* temp = item.msg;
+            printf("item.msg is %s\n", item.msg);
+            printf("job_thread: item.msg is %s\n", item.msg);
+            // char* rest = test1;
+            // printf("1. %s\n", test1);
+
+            char* to_username = strtok_r(temp, "\r\n", &temp);
+            printf("2. to_username: %s\n", to_username);
+
+            int to_user_fd = find_fd_by_name(&users_list, to_username);
+            printf("2. to_user fd: %d\n", to_user_fd);
+
+            char* msg_content = strtok_r(temp, "\r\n", &temp);
+            printf("3. msg_content: %s\n", msg_content);
+
+            int msg_len = strlen(to_username) + 2 + strlen(msg_content)+2;
+            printf("3. msg length: %d\n", msg_len);
+
+            char buf[msg_len];
+            bzero(&buf, sizeof(buf));
+
+            strcat(buf, from_username);
+            strcat(buf, "\r\n");
+            strcat(buf, msg_content);
+            strcat(buf, "\r\n");
+
+            // // bzero(example, sizeof(example));
+            
+            printf("4. concatenated: %s\n", buf);
+
+            
+            /* sending to from_username "OK" when successfully received */
+            send_header.msg_len = 0;
+            send_header.msg_type = OK;
+            
+            wr_msg(from_user_fd, &send_header, NULL);
+            
+            /* update recv_header for to_username */
+            recv1_header.msg_len = msg_len;
+            recv1_header.msg_type = USRRECV;
+            
+            int retval = wr_msg(to_user_fd, &recv1_header, buf);
+            // printf("retval for wr_msg: %d\n", retval);
+
+            continue;
+        }
+
+        if(item.header.msg_type == USRLIST){
+
+            // if ok, server returns list of users
+            continue;
+        }
 
     }
     /* Is it necessary? is it just because of void* function? */
@@ -289,9 +413,12 @@ void *job_thread(void* vargp){
 void run_server(int server_port, int number_job_thread) {
     listen_fd = server_init(server_port); // Initiate server and start listening on specified port
 
-    // update audit_log
-    Sem_init(&audit_mutex, 0, 1);
-    audit_write("\nServer initialized and listening");
+    // update audit log
+    P(&audit_mutex);
+    audit_fp = fopen(audit_log, "a");
+    fprintf(audit_fp, "\n%ld\tInitializes server, listening on port: %d\n", time(NULL), server_port);
+    fclose(audit_fp);
+    V(&audit_mutex);
 
     /* create new local variables. */
     int client_fd;
@@ -308,17 +435,20 @@ void run_server(int server_port, int number_job_thread) {
     petr_header reply_header;
 
     /* initialize global shared resources. setup semaphore for user name */
-    Sem_init(&users_mutex, 0, 1);
+    sem_init(&users_mutex, 0, 1);
 
     users_list.head = NULL;
     users_list.length = 0;
 
-    /* create N job threads */
+    /* create N job threads and update audit log */
+    P(&audit_mutex);
+    audit_fp = fopen(audit_log, "a");
     for(int i = 0; i < number_job_thread; i++){
         pthread_create(&tid, NULL, job_thread, NULL);
-        // update audit log
-        audit_write("Job Thread created");
+        fprintf(audit_fp, "%ld\tCreate job thread #%d\n", time(NULL), i);
     }
+    fclose(audit_fp);
+    V(&audit_mutex);
 
     /* from accepting, user check */
     while (1) {
@@ -339,8 +469,6 @@ void run_server(int server_port, int number_job_thread) {
 
         // accept now connection
         } else {
-            //update audit_log
-            audit_write("New client connection accepted");
             printf("New client connetion accepted\n");
 
             /* read the message header from the new client
@@ -360,6 +488,14 @@ void run_server(int server_port, int number_job_thread) {
                 exit(EXIT_FAILURE);
             }
 
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tReceive message from client on main thread\n\t\t\t" \
+                              "msg_type: 0x%x\tmsg_body: %s\n", time(NULL),login_header.msg_type, user_name); 
+            fclose(audit_fp);
+            V(&audit_mutex);
+
             // check if the message type is LOGIN
             if(login_header.msg_type == LOGIN){
                 printf("New client login\n");
@@ -370,7 +506,10 @@ void run_server(int server_port, int number_job_thread) {
                  */
                 node_t* current = users_list.head;
                 while(current != NULL){
-                    /* send error message back to client if username already exists*/
+                    /* send error message back to client if username already exists
+                     * is it necessary to use strcmp or strncmp instead of logical
+                     * operator equal ?
+                     */
                     if(strcmp( ((char*)(current->value)), user_name ) == 0){
                         user_exist = 1;
                         reply_header.msg_len = 0;
@@ -396,7 +535,15 @@ void run_server(int server_port, int number_job_thread) {
                 /* if username did not exist, add username to linked list. UNORDERED */
                 insertRear(&users_list, (void*)user_name, *client_fd);
 
-                // (for testing) print out the users linked list
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tClient successfully logged in\n\t\t\t" \
+                        "Username: %s\tUserFD: %d\n", time(NULL), user_name, *client_fd);
+                fclose(audit_fp);
+                V(&audit_mutex);
+
+                // (for testing) print out the linked list
                 current = users_list.head;
                 while(current != NULL){
                     printf("user: %s\t", (char*)(current->value));
@@ -417,6 +564,13 @@ void run_server(int server_port, int number_job_thread) {
 
                 // after login successfully, create a client thread
                 pthread_create(&tid, NULL, process_client, (void *)client_fd);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tCreate client thread for user\n", time(NULL));
+                fclose(audit_fp);
+                V(&audit_mutex);
             }
         }
     }
@@ -459,6 +613,11 @@ int main(int argc, char *argv[]) {
      * free it
      */
     sbuf_init(&job_buffer, NUMBER_JOB_BUF);
+
+    /* initilization of audit mutex.
+     * Open the audit log file for writing
+     */
+    Sem_init(&audit_mutex, 0, 1);
 
     /* run server with N number of job thread */
     run_server(port, N);
