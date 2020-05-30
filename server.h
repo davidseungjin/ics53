@@ -28,7 +28,7 @@
 typedef struct {
     char* room_name;
     char* room_creater;
-    List_t participants;
+    List_t* participants;
 } chat_room;
 
 typedef struct {
