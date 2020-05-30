@@ -47,25 +47,18 @@ void V(sem_t *sem) {
 	    perror("V error");
 }
 
-/* Write the given string to the audit_log text file */
-void audit_write(char* text, int text_len){
+/* Write the given string to the audit_log text file.
+   Maybe we can implement more arguments for output?*/
+void audit_write(char* text){
     P(&audit_mutex);
-    int audit_fd;
-    // Open file descriptor
-    if ( (audit_fd = open(audit_log, O_WRONLY|O_APPEND|O_CREAT, 00700)) < 0)
+    FILE* audit_fp;
+    // Open file
+    if ( (audit_fp = fopen(audit_log, "a")) < 0)
         perror("Open Audit Log error");
-    // Convert the time integer to string
-    char text_time[BUFFER_SIZE];
-    sprintf(text_time, "%ld", time(NULL));
-
-    // Write the time to audit file
-    if (write(audit_fd, text_time, 10) < 0)
-        perror("write to Audit Log error");
-    // Write the log message to the audit log file
-    if (write(audit_fd, text, text_len) < 0 )
-        perror("Write to Audit Log error");
-    // Close file descriptor
-    if (close(audit_fd) < 0)
+    // Write to file
+    fprintf(audit_fp, "%ld\t%s\n", time(NULL), text);
+    // Close file
+    if (fclose(audit_fp) < 0)
         perror("Close Audit Log error");
     V(&audit_mutex);
 }
@@ -296,9 +289,9 @@ void *job_thread(void* vargp){
 void run_server(int server_port, int number_job_thread) {
     listen_fd = server_init(server_port); // Initiate server and start listening on specified port
 
-    // write to audit_log
+    // update audit_log
     Sem_init(&audit_mutex, 0, 1);
-    audit_write("\tServer initialized\n", 20);
+    audit_write("\nServer initialized and listening");
 
     /* create new local variables. */
     int client_fd;
@@ -320,9 +313,11 @@ void run_server(int server_port, int number_job_thread) {
     users_list.head = NULL;
     users_list.length = 0;
 
-    /* create N job threads */ 
+    /* create N job threads */
     for(int i = 0; i < number_job_thread; i++){
         pthread_create(&tid, NULL, job_thread, NULL);
+        // update audit log
+        audit_write("Job Thread created");
     }
 
     /* from accepting, user check */
@@ -344,6 +339,8 @@ void run_server(int server_port, int number_job_thread) {
 
         // accept now connection
         } else {
+            //update audit_log
+            audit_write("New client connection accepted");
             printf("New client connetion accepted\n");
 
             /* read the message header from the new client
