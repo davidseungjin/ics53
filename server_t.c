@@ -19,8 +19,8 @@ sem_t users_mutex;
 List_t users_list;
 
 /* 2: Room management */
-sem_t room_mutex;
-chat_room roominfo;
+sem_t rooms_mutex;
+List_t rooms_list;
 
 /* 3: Audit Log */
 char* audit_log;
@@ -276,31 +276,77 @@ void *job_thread(void* vargp){
 
         /* Later, the message should be customized.
          * It is just for checking xterm window work or not.
-         * According to msg type. Server needs to react differently. 
+         * According to msg type. Server needs to react differently.
          * If server react differently, xterm window will occur accordingly.
          * uncomment out below for testing.
          */
         // wr_msg(item.client_fd, &send_header, NULL);
 
-        
-        // ESERV: generic error 
+
+        // ESERV: generic error
 
         if(item.header.msg_type == LOGOUT){
-            
+
             continue;
         }
 
         if(item.header.msg_type == RMCREATE){
-            // ERMEXISTS: Room exists already
-            
-            
+            // flag that checks if room exists or not
+            int roomexist = 0;
+
+            // check if room already exist;
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                // if the room name already exists in rooms_list
+                if(strcmp(item.msg, (*(chat_room*)(current->value)).room_name) == 0){
+                   // sending to client error ERMEXISTS: Room exists already
+
+                   roomexist = 1;
+                   break;
+                }
+                current = current->next;
+            }
+
+            /* If room does not exist, create a new chat_room,
+               and create a new linked list for the participants
+             */
+            if(roomexist == 0){
+                char* user = find_name_by_fd(&users_list, item.client_fd);
+
+                // create new linked list for the partcipants in the room
+                List_t participants;
+                // add the creater to the linked list
+                insertRear(&participants, (void*)user, item.client_fd);
+
+                // create and initialize new chat_room
+                chat_room new_room;
+                new_room.room_name = item.msg;
+                new_room.room_creater = user;
+                new_room.participants = participants;
+                // add the new chat_room to the rooms_list linked list
+                insertRear(&rooms_list, (void*)&new_room, -1);
+
+                // sending to client "OK" when successfully create room
+                send_header.msg_len = 0;
+                send_header.msg_type = OK;
+                wr_msg(item.client_fd, &send_header, NULL);
+
+                // (testing) printing all room info in rooms_list
+                current = rooms_list.head;
+                while(current != NULL){
+                    printf("room_name: %s\n", ((chat_room*)(current->value))->room_name);
+                    printf("room_creater: %s\n", ((chat_room*)(current->value))->room_creater);
+                    current = current->next;
+                }
+            }
+
             continue;
         }
-        
+
         if(item.header.msg_type == RMDELETE){
             continue;
         }
-        
+
         if(item.header.msg_type == RMLIST){
             // return list of rooms w/ users per room
             // <roomname>:<username>,...,<username>\n...
@@ -320,7 +366,7 @@ void *job_thread(void* vargp){
         if(item.header.msg_type == RMJOIN){
             // ERMFULL: room capacity reached
             // ERMNOTFOUND: room does not exist on server
-            
+
             continue;
         }
 
@@ -358,16 +404,16 @@ void *job_thread(void* vargp){
             // printf("1. %s\n", test1);
 
             char* to_username = strtok_r(temp, "\r\n", &temp);
-            printf("2. to_username: %s\n", to_username);
+            //printf("2. to_username: %s\n", to_username);
 
             int to_user_fd = find_fd_by_name(&users_list, to_username);
-            printf("2. to_user fd: %d\n", to_user_fd);
+            //printf("2. to_user fd: %d\n", to_user_fd);
 
             char* msg_content = strtok_r(temp, "\r\n", &temp);
-            printf("3. msg_content: %s\n", msg_content);
+            //printf("3. msg_content: %s\n", msg_content);
 
             int msg_len = strlen(to_username) + 2 + strlen(msg_content)+2;
-            printf("3. msg length: %d\n", msg_len);
+            //printf("3. msg length: %d\n", msg_len);
 
             char buf[msg_len];
             bzero(&buf, sizeof(buf));
@@ -377,21 +423,19 @@ void *job_thread(void* vargp){
             strcat(buf, msg_content);
             strcat(buf, "\r\n");
 
-            // // bzero(example, sizeof(example));
-            
-            printf("4. concatenated: %s\n", buf);
+            //bzero(example, sizeof(example));
+            //printf("4. concatenated: %s\n", buf);
 
-            
             /* sending to from_username "OK" when successfully received */
             send_header.msg_len = 0;
             send_header.msg_type = OK;
-            
+
             wr_msg(from_user_fd, &send_header, NULL);
-            
+
             /* update recv_header for to_username */
             recv1_header.msg_len = msg_len;
             recv1_header.msg_type = USRRECV;
-            
+
             int retval = wr_msg(to_user_fd, &recv1_header, buf);
             // printf("retval for wr_msg: %d\n", retval);
 
@@ -436,9 +480,13 @@ void run_server(int server_port, int number_job_thread) {
 
     /* initialize global shared resources. setup semaphore for user name */
     sem_init(&users_mutex, 0, 1);
+    sem_init(&rooms_mutex, 0, 1);
 
     users_list.head = NULL;
     users_list.length = 0;
+
+    rooms_list.head = NULL;
+    rooms_list.head = 0;
 
     /* create N job threads and update audit log */
     P(&audit_mutex);
