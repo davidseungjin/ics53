@@ -489,15 +489,6 @@ void *job_thread(void* vargp){
             continue;
         }
 
-        if(item.header.msg_type == RMDELETE){
-            // ERMNOTFOUND: room does not exist on server
-            // ERMDENIED: anyone except created can not RMDELETE
-
-            // RMCLOSED to client?
-
-            continue;
-        }
-
         if(item.header.msg_type == RMJOIN){
             // set up local variables
             int roomexist = 0;
