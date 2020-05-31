@@ -372,6 +372,89 @@ void *job_thread(void* vargp){
         }
 
         if(item.header.msg_type == RMDELETE){
+
+            // flag that checks if room exists or not
+            int roomexist = 0;
+            // flag that checks if we should remove the room or not
+            int roomremove = 0;
+            // flag that keeps track of the index of the targer room in list
+            int index = 0;
+            // obtain room name
+            char* room_name = item.msg;
+            // obtain user name
+            char* user_name = find_name_by_fd(&users_list, item.client_fd);
+
+
+            P(&rooms_mutex);
+            // check if room already exist
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                chat_room* room_ptr = (chat_room*)(current->value);
+                // if the room exists in the rooms_list
+                if(strcmp(room_name, room_ptr->room_name) == 0){
+
+                    // if the room exists, and user is the room creater
+                    if(strcmp(user_name, room_ptr->room_creater) == 0){
+
+                        // for every participant in the room
+                        // send RMCLOSED message, and free the participant name
+                        node_t* participant = room_ptr->participants->head;
+                        while(participant != NULL){
+                            if(strcmp(participant->value, user_name) != 0){
+                                send_header.msg_len = strlen(room_name) + 1;
+                                send_header.msg_type = RMCLOSED;
+                                wr_msg(participant->fd, &send_header, room_name);
+                            }
+                            free(participant->value);
+                            participant = participant->next;
+                        }
+
+                        // free every node in participants list
+                        deleteList(room_ptr->participants);
+                        // free everything inside the room structure
+                        free(room_ptr->room_name);
+                        free(room_ptr->room_creater);
+                        free(room_ptr->participants);
+                        // est the flag for room remove
+                        roomremove = 1;
+
+                    // if the room exist, but user is not the creater
+                    }else{
+                        // send ERMDENIED message to user
+                        send_header.msg_len = 0;
+                        send_header.msg_type = ERMDENIED;
+                        wr_msg(item.client_fd, &send_header, NULL);
+                    }
+
+                    // set the flag for room exist
+                    roomexist = 1;
+                    break;
+                }
+                current = current->next;
+                index++;
+            }
+            V(&rooms_mutex);
+
+            // if the room does not exist, send ERMNOTFOUND error client
+            if(roomexist == 0){
+                send_header.msg_len = 0;
+                send_header.msg_type = ERMNOTFOUND;
+                wr_msg(item.client_fd, &send_header, NULL);
+                continue;
+            }
+
+            // if the room exist and the user is the creater,
+            // remove the room node from rooms_list
+            // and send OK message to user
+            P(&rooms_mutex);
+            if(roomexist == 1 && roomremove == 1){
+                removeByIndex(&rooms_list, index);
+                send_header.msg_len = 0;
+                send_header.msg_type = OK;
+                wr_msg(item.client_fd, &send_header, NULL);
+            }
+            V(&rooms_mutex);
+
             continue;
         }
 
