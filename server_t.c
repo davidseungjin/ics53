@@ -198,7 +198,7 @@ void *process_client(void *clientfd_ptr) {
          */
         retval = rd_msgheader(client_fd, &recv_header);
         if (retval < 0) {
-            printf("Receiving failed\n");
+            printf("Reading message header failed\n");
             break;
         }
         /* After reading header, receive the correct length
@@ -214,10 +214,12 @@ void *process_client(void *clientfd_ptr) {
          */
         bzero(buffer, BUFFER_SIZE);
 
-        retval = read(client_fd, buffer, recv_header.msg_len);
-        if (retval <=  0) {
-            printf("Receiving failed\n");
-            break;
+        if(recv_header.msg_len > 0){
+            retval = read(client_fd, buffer, recv_header.msg_len);
+            if (retval <=  0) {
+                printf("Reading message body failed\n");
+                break;
+            }
         }
 
         V(&buffer_mutex);
@@ -294,7 +296,8 @@ void *job_thread(void* vargp){
             // flag that checks if room exists or not
             int roomexist = 0;
 
-            // check if room already exist;
+            P(&rooms_mutex);
+            // check if room already exist
             node_t* current = rooms_list.head;
             while(current != NULL){
                 // if the room name already exists in rooms_list
@@ -302,12 +305,13 @@ void *job_thread(void* vargp){
                    // sending to client error ERMEXISTS: Room exists already
                    send_header.msg_len = 0;
                    send_header.msg_type = ERMEXISTS;
-                   wr_msg(item.client_fd, &send_header, NULL); 
+                   wr_msg(item.client_fd, &send_header, NULL);
                    roomexist = 1;
                    break;
                 }
                 current = current->next;
             }
+            V(&rooms_mutex);
 
             /* If room does not exist, create a new chat_room,
                and create a new linked list for the participants
@@ -375,6 +379,30 @@ void *job_thread(void* vargp){
             // return list of rooms w/ users per room
             // <roomname>:<username>,...,<username>\n...
 
+
+            /* THIS IS ONLY FOR DEBUGGING
+               Printing all room info in rooms_list,
+               and all participants info in each room.
+             */
+
+            printf("\nPrinting Room List\n");
+
+            node_t* room = rooms_list.head;
+            while(room != NULL){
+                printf("room_name: %s\n", ((chat_room*)(room->value))->room_name);
+                printf("room_creater: %s\n", ((chat_room*)(room->value))->room_creater);
+                node_t* participant = ((chat_room*)(room->value))->participants->head;
+                while(participant != NULL){
+                    printf("participant: %s\n", (char*)(participant->value));
+                    participant = participant->next;
+                }
+                room = room->next;
+            }
+
+            send_header.msg_len = 0;
+            send_header.msg_type = RMLIST;
+            wr_msg(item.client_fd, &send_header, NULL);
+
             continue;
         }
 
@@ -388,8 +416,45 @@ void *job_thread(void* vargp){
         }
 
         if(item.header.msg_type == RMJOIN){
-            // ERMFULL: room capacity reached
-            // ERMNOTFOUND: room does not exist on server
+            // set up local variables
+            int roomexist = 0;
+            char* room_name = item.msg;
+            int user_fd = item.client_fd;
+
+            char* user = find_name_by_fd(&users_list, item.client_fd);
+            char* user_name = malloc(1000);
+            strcpy(user_name, user);
+
+
+            P(&rooms_mutex);
+            // check if the room exist or not
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                // if the room name exists in rooms_list
+                if(strcmp(room_name, ((chat_room*)(current->value))->room_name) == 0){
+                    // add user to the room's participant linked list
+                    List_t* members_list = ((chat_room*)(current->value))->participants;
+                    insertRear(members_list, (void*)user_name, user_fd);
+                    // set the flag for room exist
+                    roomexist = 1;
+                    break;
+                }
+                current = current->next;
+            }
+            V(&rooms_mutex);
+
+            // if the room does not exist, send error to client
+            if(roomexist == 0){
+                send_header.msg_len = 0;
+                send_header.msg_type = ERMNOTFOUND;
+                wr_msg(item.client_fd, &send_header, NULL);
+
+            // if the user is added to the room, send OK to client
+            }else{
+                send_header.msg_len = 0;
+                send_header.msg_type = OK;
+                wr_msg(item.client_fd, &send_header, NULL);
+            }
 
             continue;
         }
@@ -397,13 +462,13 @@ void *job_thread(void* vargp){
         if(item.header.msg_type == RMLEAVE){
             // ERMNOTFOUND: room does not exist on server
             // ERMDENIED: room creater can not leave
-            
+
             continue;
         }
 
         if(item.header.msg_type == RMSEND){
             // ERMNOTFOUND: room does not exist on server
-            
+
             // msg looks like  <roomname>\r\n<message>...
             // then, from server to clients joined the room
             // RMRECV: <roomname>\r\n<from_username>\r\n<message>
