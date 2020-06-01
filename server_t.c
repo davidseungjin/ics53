@@ -255,7 +255,7 @@ void *job_thread(void* vargp){
          * So, modified sbuf_t. Instead of putting integer, made structure.
          * That contains client_fd, header, msg. By dynamically allocation.
          */
-        header_and_msg item = sbuf_remove(&job_buffer);    
+        header_and_msg item = sbuf_remove(&job_buffer);
 
         /* Once you took client_fd, header, msg... DO SOMETHING !!!!! */
 
@@ -536,6 +536,77 @@ void *job_thread(void* vargp){
         if(item.header.msg_type == RMLEAVE){
             // ERMNOTFOUND: room does not exist on server
             // ERMDENIED: room creater can not leave
+
+            // flag that checks if room exists or not
+            int roomexist = 0;
+            // flag that checks if user in the room or not
+            int userinroom = 0;
+            // index that keeps track of the user's index in the participants list
+            int index = 0;
+            // obtain room name
+            char* room_name = item.msg;
+            // obtain user name
+            char* user_name = find_name_by_fd(&users_list, item.client_fd);
+
+            P(&rooms_mutex);
+            // check if room already exist
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                chat_room* room_ptr = (chat_room*)(current->value);
+                // if the room exists in the rooms_list,
+                if(strcmp(room_name, room_ptr->room_name) == 0){
+                    // set flag for room exist
+                    roomexist = 1;
+                    // check if the user is in the room
+                    node_t* participant = room_ptr->participants->head;
+                    while(participant != NULL){
+                        // if the user is in the room
+                        if(strcmp(participant->value, user_name) == 0){
+                            // set flag for user in room
+                            userinroom = 1;
+                            // if the user is in the room & not creater
+                            if(strcmp(room_ptr->room_creater, user_name) != 0){
+                                // remove the user from the participants list
+                                free(participant->value);
+                                removeByIndex(room_ptr->participants, index);
+                                // send OK message to user
+                                send_header.msg_len = 0;
+                                send_header.msg_type = OK;
+                                wr_msg(item.client_fd, &send_header, NULL);
+                                break;
+
+                            // else if the user is in the room but is the creater
+                            }else{
+                                // send ERMDENIED because creater can't leave room
+                                send_header.msg_len = 0;
+                                send_header.msg_type = ERMDENIED;
+                                wr_msg(item.client_fd, &send_header, NULL);
+                                break;
+                            }
+                        }
+                        participant = participant->next;
+                        index++;
+                    }
+                }
+                current = current->next;
+            }
+            V(&rooms_mutex);
+
+            // if the room does not exist,
+            // send ERMNOTFOUND to user
+            if(roomexist == 0){
+                send_header.msg_len = 0;
+                send_header.msg_type = ERMNOTFOUND;
+                wr_msg(item.client_fd, &send_header, NULL);
+            }
+
+            // if the room exist, but the user is not in the room
+            // send OK to user
+            if(roomexist == 1 && userinroom == 0){
+                send_header.msg_len = 0;
+                send_header.msg_type = OK;
+                wr_msg(item.client_fd, &send_header, NULL);
+            }
 
             continue;
         }
