@@ -319,7 +319,6 @@ void *job_thread(void* vargp){
             if(roomexist == 0){
 
                 P(&rooms_mutex);
-
                 /* create new strings and new spaces in the memory
                    so the strings won't get overwritten
                  */
@@ -350,29 +349,17 @@ void *job_thread(void* vargp){
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
 
-                // (testing) printing all room info in rooms_list
-                current = rooms_list.head;
-                while(current != NULL){
-                    printf("room_name: %s\n", ((chat_room*)(current->value))->room_name);
-                    printf("room_creater: %s\n", ((chat_room*)(current->value))->room_creater);
-                    node_t* participant = ((chat_room*)(current->value))->participants->head;
-                    // (testing) priting all participants in the room
-                    // while(participant != NULL){
-                    //     printf("partcipant: %s\n", (char*)(participant->value));
-                    //     participant = participant->next;
-                    // }
-                    current = current->next;
-                }
-
                 V(&rooms_mutex);
 
+                // FOR DEBUG ONLY: printing room creation to server
+                printf("create room:\n");
+                printf("room_name: %s\n", room_name);
+                printf("room_creater: %s\n", user_name);
             }
-
             continue;
         }
 
         if(item.header.msg_type == RMDELETE){
-
             // flag that checks if room exists or not
             int roomexist = 0;
             // flag that checks if we should remove the room or not
@@ -383,7 +370,6 @@ void *job_thread(void* vargp){
             char* room_name = item.msg;
             // obtain user name
             char* user_name = find_name_by_fd(&users_list, item.client_fd);
-
 
             P(&rooms_mutex);
             // check if room already exist
@@ -452,6 +438,9 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
+
+                // FOR DEBUG ONLY: printing room deletion to server
+                printf("room delete: %s\n", room_name);
             }
             V(&rooms_mutex);
 
@@ -462,29 +451,57 @@ void *job_thread(void* vargp){
             // return list of rooms w/ users per room
             // <roomname>:<username>,...,<username>\n...
 
-
-            /* THIS IS ONLY FOR DEBUGGING
-               Printing all room info in rooms_list,
-               and all participants info in each room.
-             */
-
-            printf("\nPrinting Room List\n");
-
-            node_t* room = rooms_list.head;
-            while(room != NULL){
-                printf("room_name: %s\n", ((chat_room*)(room->value))->room_name);
-                printf("room_creater: %s\n", ((chat_room*)(room->value))->room_creater);
-                node_t* participant = ((chat_room*)(room->value))->participants->head;
-                while(participant != NULL){
-                    printf("participant: %s\n", (char*)(participant->value));
-                    participant = participant->next;
-                }
-                room = room->next;
+            P(&rooms_mutex);
+            // check if there are any rooms in rooms_list
+            // if no room in rooms_list, send RMLIST with no message body to user
+            node_t* current = rooms_list.head;
+            if(current == NULL){
+                send_header.msg_len = 0;
+                send_header.msg_type = RMLIST;
+                wr_msg(item.client_fd, &send_header, NULL);
+                continue;
             }
 
-            send_header.msg_len = 0;
+            int msg_size = 0;
+            char msg_body[1024];
+            bzero(&msg_body, sizeof(msg_body));
+
+            // for every room in room_list
+            while(current != NULL){
+                chat_room* room_ptr = (chat_room*)(current->value);
+                // concatenate the room name to msg_body
+                strcat(msg_body, room_ptr->room_name);
+                strcat(msg_body, ":");
+                msg_size = msg_size + strlen(room_ptr->room_name) + 1;
+                // for every participant in the room
+                node_t* participant = room_ptr->participants->head;
+                while(participant != NULL){
+                    // concatenate the participant name to msg_body
+                    strcat(msg_body, participant->value);
+                    msg_size = msg_size + strlen(participant->value);
+                    // concatenate comma if the current participant is not the last
+                    if(participant->next != NULL){
+                        strcat(msg_body, ",");
+                        msg_size = msg_size + 1;
+                    }
+                    participant = participant->next;
+                }
+                // concatenate new line after concatenating every participants in the room
+                strcat(msg_body, "\n");
+                msg_size = msg_size + 1;
+                current = current->next;
+            }
+            V(&rooms_mutex);
+
+            // size + 1 for the null terminator at the end
+            msg_size = msg_size + 1;
+
+            // FOR DEBUG ONLY: printing roomlist to server
+            printf("roomlist:\n%s", msg_body);
+
+            send_header.msg_len = msg_size;
             send_header.msg_type = RMLIST;
-            wr_msg(item.client_fd, &send_header, NULL);
+            wr_msg(item.client_fd, &send_header, msg_body);
 
             continue;
         }
@@ -504,11 +521,26 @@ void *job_thread(void* vargp){
             // check if the room exist or not
             node_t* current = rooms_list.head;
             while(current != NULL){
+                chat_room* room_ptr = (chat_room*)(current->value);
                 // if the room name exists in rooms_list
-                if(strcmp(room_name, ((chat_room*)(current->value))->room_name) == 0){
+                if(strcmp(room_name, room_ptr->room_name) == 0){
+
+                    // check if the user is not previously in the room
+                    int userinroom = 0;
+                    node_t* participant = room_ptr->participants->head;
+                    while(participant != NULL){
+                        if(strcmp(user_name, participant->value) == 0){
+                            userinroom = 1;
+                        }
+                        participant = participant->next;
+                    }
+
+                    // if the user is not previouslt in the list,
                     // add user to the room's participant linked list
-                    List_t* members_list = ((chat_room*)(current->value))->participants;
-                    insertRear(members_list, (void*)user_name, user_fd);
+                    if(userinroom == 0){
+                        List_t* members_list = ((chat_room*)(current->value))->participants;
+                        insertRear(members_list, (void*)user_name, user_fd);
+                    }
                     // set the flag for room exist
                     roomexist = 1;
                     break;
@@ -528,15 +560,15 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
+
+                // FOR DEBUG ONLY: printing room join to server
+                printf("user %s joins room %s\n", user_name, room_name);
             }
 
             continue;
         }
 
         if(item.header.msg_type == RMLEAVE){
-            // ERMNOTFOUND: room does not exist on server
-            // ERMDENIED: room creater can not leave
-
             // flag that checks if room exists or not
             int roomexist = 0;
             // flag that checks if user in the room or not
@@ -573,6 +605,9 @@ void *job_thread(void* vargp){
                                 send_header.msg_len = 0;
                                 send_header.msg_type = OK;
                                 wr_msg(item.client_fd, &send_header, NULL);
+
+                                // FOR DEBUG ONLY: printing room leave to server
+                                printf("user %s leaves room %s\n", user_name, room_name);
                                 break;
 
                             // else if the user is in the room but is the creater
