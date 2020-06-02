@@ -31,7 +31,7 @@ sem_t audit_mutex;
 sbuf_t job_buffer;
 
 /* 5: general purpose?: for check at JOB THREAD */
-sem_t jobjob;
+// sem_t jobjob;            maybe not necessary
 
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
@@ -245,7 +245,6 @@ void *process_client(void *clientfd_ptr) {
 /* Job thread function*/
 void *job_thread(void* vargp){
     // printf("job_thread is doing, thread ID is %ld\n", pthread_self());
-    Sem_init(&jobjob, 0, 1);
     while(1){
 
         /* Background
@@ -258,7 +257,6 @@ void *job_thread(void* vargp){
         header_and_msg item = sbuf_remove(&job_buffer);
 
         /* Once you took client_fd, header, msg... DO SOMETHING !!!!! */
-
         /* declare message header for receiving via petr protocol */
 
         printf("job_thread: item.msg is %s\n", item.msg);
@@ -266,15 +264,14 @@ void *job_thread(void* vargp){
         printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
         printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
 
-
         /* declare mssage header for sending via petr protocaol */
         petr_header send_header;
         send_header.msg_len = 0;
         send_header.msg_type = OK;
 
-        petr_header recv1_header;
-        recv1_header.msg_len = 0;
-        recv1_header.msg_type = OK;
+        petr_header recv_header;
+        recv_header.msg_len = 0;
+        recv_header.msg_type = OK;
 
         /* Later, the message should be customized.
          * It is just for checking xterm window work or not.
@@ -288,7 +285,7 @@ void *job_thread(void* vargp){
         // ESERV: generic error
 
         if(item.header.msg_type == LOGOUT){
-
+            printf("JOB thread: Logout case\n");
             continue;
         }
 
@@ -652,74 +649,142 @@ void *job_thread(void* vargp){
             // msg looks like  <roomname>\r\n<message>...
             // then, from server to clients joined the room
             // RMRECV: <roomname>\r\n<from_username>\r\n<message>
-
+            printf("JOB thread: RMSend case\n");
             continue;
         }
 
         if(item.header.msg_type == USRSEND){
-            // EUSRNOTFOUND: user does not exist on server
-            //
-            // then, from server to user who receives
-            // USERRECV: <from_username>\r\n<message>
-
+            /* Attention
+             * 
+             * WHen sending unknown user, server.c cannot 
+             * handle preventing xterm window opening
+             * so, it should be handled once the window is opened.
+             *
+             * EUSRNOTFOUND: user does not exist on server
+             * If user exist, the message template is 
+             * USERRECV: <from_username>\r\n<message>
+             */
             int from_user_fd = item.client_fd;
             char* from_username = find_name_by_fd(&users_list, from_user_fd);
-            printf("from_username and fd are %s, %d\n", from_username, from_user_fd);
 
-            char* temp = item.msg;
-            printf("item.msg is %s\n", item.msg);
-            printf("job_thread: item.msg is %s\n", item.msg);
-            // char* rest = test1;
-            // printf("1. %s\n", test1);
+            /* using msg body (format is <to_username>\r\n<msg> )
+             * extract to_username, and pulling fd data by function
+             * this to_user_fd will be used fot wd_msg function.
+             */
 
-            char* to_username = strtok_r(temp, "\r\n", &temp);
-            //printf("2. to_username: %s\n", to_username);
+            char* to_username = strtok_r(item.msg, "\r\n", &(item.msg));
+            printf("to_username: %s\n", to_username);
 
             int to_user_fd = find_fd_by_name(&users_list, to_username);
-            //printf("2. to_user fd: %d\n", to_user_fd);
+            // printf("2. to_username: %s\n", to_username);
+            // printf("2. to_user fd: %d\n", to_user_fd);
+            
+            if(to_user_fd == -1){
+                send_header.msg_len = 0;
+                send_header.msg_type = EUSRNOTFOUND;
+                // printf("to_user_fd == -1 case\n");
+                // printf("send_header.msg_len: %d \n", send_header.msg_len);
+                // printf("send_header.msg_type: %d \n", send_header.msg_type);
 
-            char* msg_content = strtok_r(temp, "\r\n", &temp);
-            //printf("3. msg_content: %s\n", msg_content);
+                int retval = wr_msg(from_user_fd, &send_header, NULL);
+                // printf("retval: %d\n", retval);
+                
+                /* Need to check from prof or TA.
+                 * Understood server (main, client, job thread)
+                 * cannot prevent from opening xterm window
+                 * nevertheless unknown user.
+                 * However, when sending this EUSRNOTFOUND to from_user
+                 * what happens? from_username get EUSRNOTFOUND msg header
+                 * but xterm window still exist, and it is even possible to input
+                 * text. (everytimg text is input, server generate this msg to )
+                 * from_username. that's it.
+                 */
+                continue;    
+            }
 
-            int msg_len = strlen(to_username) + 2 + strlen(msg_content)+2;
-            //printf("3. msg length: %d\n", msg_len);
+            if(to_user_fd == from_user_fd){
+                send_header.msg_len = 0;
+                send_header.msg_type = ESERV;
+                int retval = wr_msg(from_user_fd, &send_header, NULL);
+                // printf("retval: %d\n", retval);
+                
+                /* Same concern like EUSRNOTFOUND
+                 * nothing we can do other than making server send this
+                 * msg to from_username
+                 */
 
+                continue;
+            }
+
+            char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
+            
+            int msg_len = strlen(from_username) + 2 + strlen(msg_content);
+            // printf("3. msg_content: %s\n", msg_content);
+            // printf("3. msg length: %d\n", msg_len);
+            
+            
+            /* making msg to send to to_username */
             char buf[msg_len];
             bzero(&buf, sizeof(buf));
-
             strcat(buf, from_username);
             strcat(buf, "\r\n");
             strcat(buf, msg_content);
-            strcat(buf, "\r\n");
+            // strcat(buf, "\0");
 
-            //bzero(example, sizeof(example));
-            //printf("4. concatenated: %s\n", buf);
-
-            /* sending to from_username "OK" when successfully received */
+            // sending to from_username "OK" when successfully received
             send_header.msg_len = 0;
             send_header.msg_type = OK;
-
-            wr_msg(from_user_fd, &send_header, NULL);
-
-            /* update recv_header for to_username */
-            recv1_header.msg_len = msg_len;
-            recv1_header.msg_type = USRRECV;
-
-            int retval = wr_msg(to_user_fd, &recv1_header, buf);
+            int retval1 = wr_msg(from_user_fd, &send_header, NULL);
             // printf("retval for wr_msg: %d\n", retval);
+
+            // update recv_header for to_username
+            recv_header.msg_len = msg_len;
+            recv_header.msg_type = USRRECV;
+            
+            int retval2 = wr_msg(to_user_fd, &recv_header, buf);
+            // printf("buf for wr_msg: %s\n", buf);
 
             continue;
         }
 
         if(item.header.msg_type == USRLIST){
+            int from_user_fd = item.client_fd;
+            char* from_username = find_name_by_fd(&users_list, from_user_fd);
+            char msg[1000];
+            bzero(&msg, sizeof(msg));
+            node_t* current = users_list.head;
 
+            while(current != NULL){
+                if(strcmp((char*)(current->value), from_username) == 0){
+                    current = current->next;
+                    continue;
+                }
+                strcat(msg, (char*)(current->value));
+                strcat(msg, "\n");
+                current = current -> next;
+            }
+            if((strlen(msg) > 0)&&(msg[strlen(msg)-1] == '\n')){
+                msg[strlen(msg)-1] = 0;
+            }
+            
+            send_header.msg_len = strlen(from_username) + strlen(msg);
+            send_header.msg_type = USRLIST;
+
+            // temprary for checking msg sending to client.
+            // for(int i = 0; i < (strlen(msg)+10); i++){
+            //     printf("i c and d is %c \t %d\n", msg[i], msg[i]);
+            // }
+            wr_msg(from_user_fd, &send_header, msg);
+
+            // bzero(&msg, sizeof(msg));
+            // free(msg);
             // if ok, server returns list of users
             continue;
         }
 
     }
     /* Is it necessary? is it just because of void* function? */
-    return NULL;
+    // return NULL;
 }
 
 
@@ -748,8 +813,8 @@ void run_server(int server_port, int number_job_thread) {
     petr_header reply_header;
 
     /* initialize global shared resources. setup semaphore for user name */
-    sem_init(&users_mutex, 0, 1);
-    sem_init(&rooms_mutex, 0, 1);
+    Sem_init(&users_mutex, 0, 1);
+    Sem_init(&rooms_mutex, 0, 1);
 
     users_list.head = NULL;
     users_list.length = 0;
@@ -943,5 +1008,7 @@ int main(int argc, char *argv[]) {
      * deinitialization(free the buffer)
      */
     sbuf_deinit(&job_buffer);
+    /* After finish execution, is it necessary to user pthread_join for job threads? */
+    
     return 0;
 }
