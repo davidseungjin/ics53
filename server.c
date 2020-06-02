@@ -456,6 +456,7 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = RMLIST;
                 wr_msg(item.client_fd, &send_header, NULL);
+                V(&rooms_mutex);
                 continue;
             }
 
@@ -655,13 +656,13 @@ void *job_thread(void* vargp){
 
         if(item.header.msg_type == USRSEND){
             /* Attention
-             * 
-             * WHen sending unknown user, server.c cannot 
+             *
+             * WHen sending unknown user, server.c cannot
              * handle preventing xterm window opening
              * so, it should be handled once the window is opened.
              *
              * EUSRNOTFOUND: user does not exist on server
-             * If user exist, the message template is 
+             * If user exist, the message template is
              * USERRECV: <from_username>\r\n<message>
              */
             int from_user_fd = item.client_fd;
@@ -678,7 +679,7 @@ void *job_thread(void* vargp){
             int to_user_fd = find_fd_by_name(&users_list, to_username);
             // printf("2. to_username: %s\n", to_username);
             // printf("2. to_user fd: %d\n", to_user_fd);
-            
+
             if(to_user_fd == -1){
                 send_header.msg_len = 0;
                 send_header.msg_type = EUSRNOTFOUND;
@@ -688,7 +689,7 @@ void *job_thread(void* vargp){
 
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
                 // printf("retval: %d\n", retval);
-                
+
                 /* Need to check from prof or TA.
                  * Understood server (main, client, job thread)
                  * cannot prevent from opening xterm window
@@ -699,7 +700,7 @@ void *job_thread(void* vargp){
                  * text. (everytimg text is input, server generate this msg to )
                  * from_username. that's it.
                  */
-                continue;    
+                continue;
             }
 
             if(to_user_fd == from_user_fd){
@@ -717,12 +718,12 @@ void *job_thread(void* vargp){
             }
 
             char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
-            
+
             int msg_len = strlen(from_username) + 2 + strlen(msg_content);
             // printf("3. msg_content: %s\n", msg_content);
             // printf("3. msg length: %d\n", msg_len);
-            
-            
+
+
             /* making msg to send to to_username */
             char buf[msg_len];
             bzero(&buf, sizeof(buf));
@@ -740,7 +741,7 @@ void *job_thread(void* vargp){
             // update recv_header for to_username
             recv_header.msg_len = msg_len;
             recv_header.msg_type = USRRECV;
-            
+
             int retval2 = wr_msg(to_user_fd, &recv_header, buf);
             // printf("buf for wr_msg: %s\n", buf);
 
@@ -766,7 +767,7 @@ void *job_thread(void* vargp){
             if((strlen(msg) > 0)&&(msg[strlen(msg)-1] == '\n')){
                 msg[strlen(msg)-1] = 0;
             }
-            
+
             send_header.msg_len = strlen(from_username) + strlen(msg);
             send_header.msg_type = USRLIST;
 
