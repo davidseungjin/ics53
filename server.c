@@ -279,13 +279,25 @@ void *job_thread(void* vargp){
          * If server react differently, xterm window will occur accordingly.
          * uncomment out below for testing.
          */
-        // wr_msg(item.client_fd, &send_header, NULL);
-
 
         // ESERV: generic error
 
         if(item.header.msg_type == LOGOUT){
             printf("JOB thread: Logout case\n");
+            /*
+            when from_user send logout,
+            server send "OK" to from_user
+
+            
+            if: from_user is participants of rooms. --> RMLEAVE
+            if: from_user is creater of rooms. --> send participants RMCLOSED; RMDELETE this room (Does it need OK to from_user again?)
+            AFTER these two --> from_user will be deleted from user_list.
+
+
+
+
+            */
+            
             continue;
         }
 
@@ -644,12 +656,113 @@ void *job_thread(void* vargp){
         }
 
         if(item.header.msg_type == RMSEND){
-            // ERMNOTFOUND: room does not exist on server
+            /* Sent by the Client to the Server to send <message> to <chatroom>
+             * If room not exist -> ERMNOTFOUND
+             * If room exist, but user is not the participant of the room -> ERMDENIED (this should never happen using our client)
+             * Upon successful send of the message to all users (not the sender) in roomname,
+             * server responds to from_user "OK"
+             * msg looks like  <roomname>\r\n<message>...
+             * then, from server to clients joined the room
+             * 
+             * RMSEND: <to_username>\r\n<message>
+             * RMRECV: receive message from a user in room.
+             * <roomname>\r\n<from_username>\r\n<message>
+             */
 
-            // msg looks like  <roomname>\r\n<message>...
-            // then, from server to clients joined the room
-            // RMRECV: <roomname>\r\n<from_username>\r\n<message>
-            printf("JOB thread: RMSend case\n");
+            int from_user_fd = item.client_fd;
+            char* from_username = find_name_by_fd(&users_list, from_user_fd);
+
+            /* using msg body (format is <to_username>\r\n<msg> )
+             * extract to_username, and pulling fd data by function
+             * this to_user_fd will be used fot wd_msg function.
+             */
+
+            char* room_name = strtok_r(item.msg, "\r\n", &(item.msg));
+            printf("room_name: %s\n", room_name);
+
+            /* This is room already existence check. there are same iterations
+             * in many different function.
+             * may need to determine on separating to helper function.
+             */
+            int roomexist = 0;
+            // P(&rooms_mutex);             Mutex is necessary? (Not an urgent issue at all)
+            
+            /* RM already exisit check.
+             * this while-loop function is to check and flag.
+             */
+            
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                // if the room name already exists in rooms_list
+                if(strcmp(room_name, ((chat_room*)(current->value))->room_name) == 0){
+                   roomexist = 1;
+                   break;
+                }
+                current = current->next;
+            }
+            
+            // V(&rooms_mutex);              Mutex is necessary? (Not an urgent issue at all)
+            
+            /* Using the value processed above
+             * determine whether RM exists or not
+             */
+            if(roomexist == 0){
+                send_header.msg_len = 0;
+                send_header.msg_type = ERMNOTFOUND;
+                int retval = wr_msg(from_user_fd, &send_header, NULL);
+                continue;    
+            }
+            
+            /* 
+             * RM exists, but sender is not the participants of the RM.
+             * send ERMDENIED to from_username
+             * (this should never happen using our client. just in case for any future)
+             * Because this doesn't happen as long as we use current client, so skip implementation if necessary.
+             */
+
+            char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
+            int msg_len = strlen(room_name) + 2 + strlen(from_username) + 2 + strlen(msg_content);
+            
+            printf("room_name, from_username, msg_content is %s %s %s\n", room_name, from_username, msg_content);
+
+            /* making msg to send to room_name
+             * <roomname>\r\n<from_username>\r\n<message>
+             */
+            
+            char buf[msg_len];
+            bzero(&buf, sizeof(buf));
+            strcat(buf, room_name);
+            strcat(buf, "\r\n");
+            strcat(buf, from_username);
+            strcat(buf, "\r\n");
+            strcat(buf, msg_content);
+
+            // P(&rooms_mutex);
+            // sending to from_username "OK" when successfully received
+            send_header.msg_len = 0;
+            send_header.msg_type = OK;
+            int retval1 = wr_msg(from_user_fd, &send_header, NULL);
+            
+            // update recv_header for to_username
+            recv_header.msg_len = msg_len;
+            recv_header.msg_type = RMRECV;
+            V(&rooms_mutex);
+
+            /* after retrieving the participants of the room
+             * send the message to each fd except from_user_fd
+             */
+            chat_room* room_ptr = (chat_room*)(current->value);
+            node_t* participant = room_ptr->participants->head;
+            
+            while(participant != NULL){
+                if(strcmp(from_username, ((char*)(participant->value))) !=0){
+                    // printf("participant: %s\n", ((char*)(participant->value)));
+                    char* to_username = (char*)(participant->value);
+                    int to_user_fd = find_fd_by_name(&users_list, to_username);
+                    int retval = wr_msg(to_user_fd, &recv_header, buf);
+                }
+                participant = participant -> next;
+            }
             continue;
         }
 
