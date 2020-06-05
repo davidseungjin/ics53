@@ -226,6 +226,8 @@ void *process_client(void *clientfd_ptr) {
 
         V(&buffer_mutex);
 
+        // if the last message was LOGOUT, break and end this client thread
+        // so no more new jobs will be inserted to the job buffer
         if(logout == 1){
             break;
         }
