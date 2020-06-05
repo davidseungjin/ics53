@@ -114,13 +114,7 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 
 /* Handler to clean up in case of "Ctrl-C" */
 void sigint_handler(int sig) {
-    printf("shutting down server\n");
-
-    P(&audit_mutex);
-    audit_fp = fopen(audit_log, "a");
-    fprintf(audit_fp, "%ld\tServer terminated due to Ctrl-C", time(NULL));
-    fclose(audit_fp);
-    V(&audit_mutex);
+    printf("\nshutting down server\n");
 
     close(listen_fd);
     sbuf_deinit(&job_buffer);
@@ -220,6 +214,10 @@ void *process_client(void *clientfd_ptr) {
 
         retval = read(client_fd, buffer, recv_header.msg_len);
         if (retval <  0) {
+            printf("Reading message body failed\n");
+            break;
+        // break if EOF is reached (client closes connection)
+        }else if (retval == 0 && recv_header.msg_len != 0){
             printf("Reading message body failed\n");
             break;
         }
@@ -1229,6 +1227,9 @@ int main(int argc, char *argv[]) {
 
     audit_log = argv[optind+1];
 
+    /* Install SIGINT handler */
+    signal(SIGINT, sigint_handler);
+
     /* initialization of sbuf. It's job buffer.
      * After complete running run_server fuction
      * free it
@@ -1248,6 +1249,6 @@ int main(int argc, char *argv[]) {
      */
     sbuf_deinit(&job_buffer);
     /* After finish execution, is it necessary to user pthread_join for job threads? */
-    
+
     return 0;
 }
