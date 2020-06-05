@@ -594,7 +594,7 @@ void *job_thread(void* vargp){
 
             int msg_size = 0;
             char msg_body[BUFFER_SIZE];
-            bzero(&msg_body, sizeof(msg_body));
+            bzero(&msg_body, BUFFER_SIZE);
 
             // for every room in room_list
             while(current != NULL){
@@ -602,7 +602,7 @@ void *job_thread(void* vargp){
                 // concatenate the room name to msg_body
                 strcat(msg_body, room_ptr->room_name);
                 strcat(msg_body, ": ");
-                msg_size = msg_size + strlen(room_ptr->room_name) + 1;
+                msg_size = msg_size + strlen(room_ptr->room_name) + 2;
                 // for every participant in the room
                 node_t* participant = room_ptr->participants->head;
                 while(participant != NULL){
@@ -627,8 +627,6 @@ void *job_thread(void* vargp){
             msg_size = msg_size + 1;
 
             // FOR DEBUG ONLY: printing roomlist to server
-            printf("roomsize1: %d\n", msg_size);
-            printf("roomsize2: %ld\n", strlen(msg_body));
             printf("roomlist:\n%s", msg_body);
 
             send_header.msg_len = msg_size;
