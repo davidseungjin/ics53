@@ -31,7 +31,7 @@ sem_t audit_mutex;
 sbuf_t job_buffer;
 
 /* 5: general purpose?: for check at JOB THREAD */
-// sem_t jobjob;            maybe not necessary
+//sem_t jobjob;           //maybe not necessary
 
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
@@ -184,6 +184,8 @@ void *process_client(void *clientfd_ptr) {
 
     /* declare return value */
     int retval;
+    /* flag for logout and terminating the client_thread */
+    int logout = 0;
 
     /* declare message header for receiving via petr protocol */
     petr_header recv_header;
@@ -191,6 +193,7 @@ void *process_client(void *clientfd_ptr) {
     Sem_init(&buffer_mutex, 0, 1);
 
     while (1) {
+
         /* Two step reading.
          * First: receive msg to clienf_fd.
          * The data contained is msg type and length. into recv_header
@@ -201,6 +204,7 @@ void *process_client(void *clientfd_ptr) {
             printf("Reading message header failed\n");
             break;
         }
+
         /* After reading header, receive the correct length
          * as stated in recv_header.msg_len. (buffer clear is necessary, so used bzero)
          * retval is just to check status of transfer
@@ -214,15 +218,17 @@ void *process_client(void *clientfd_ptr) {
          */
         bzero(buffer, BUFFER_SIZE);
 
-        if(recv_header.msg_len > 0){
-            retval = read(client_fd, buffer, recv_header.msg_len);
-            if (retval <=  0) {
-                printf("Reading message body failed\n");
-                break;
-            }
+        retval = read(client_fd, buffer, recv_header.msg_len);
+        if (retval <  0) {
+            printf("Reading message body failed\n");
+            break;
         }
 
         V(&buffer_mutex);
+
+        if(logout == 1){
+            break;
+        }
 
         /* using sbuf producer-consumer system
          * 1. store data in buf: client_fd, header, msg stored in buffer
@@ -232,8 +238,13 @@ void *process_client(void *clientfd_ptr) {
          * rd_msgheader function didn't work well in the second execution.
          * Pass by value, and forget about the rd_msgheader function.
          */
+
+        printf("New job inserted\n");
         sbuf_insert(&job_buffer, client_fd, recv_header, buffer);
 
+        if(recv_header.msg_type == LOGOUT){
+            logout = 1;
+        }
     }
 
     /* Close the socket at the end */
@@ -244,6 +255,7 @@ void *process_client(void *clientfd_ptr) {
 
 /* Job thread function*/
 void *job_thread(void* vargp){
+    pthread_detach(pthread_self());
     // printf("job_thread is doing, thread ID is %ld\n", pthread_self());
     while(1){
 
@@ -288,16 +300,124 @@ void *job_thread(void* vargp){
             when from_user send logout,
             server send "OK" to from_user
 
-            
             if: from_user is participants of rooms. --> RMLEAVE
             if: from_user is creater of rooms. --> send participants RMCLOSED; RMDELETE this room (Does it need OK to from_user again?)
             AFTER these two --> from_user will be deleted from user_list.
-
-
-
-
             */
-            
+
+            P(&users_mutex);
+            // flag used to keep track if there are any more room to delete
+            // in rooms_list
+            int deleteroom = 1;
+            char room_name[1024];
+            char user_name[1024];
+            strcpy(user_name, find_name_by_fd(&users_list, item.client_fd));
+            int user_fd;
+            user_fd = item.client_fd;
+            V(&users_mutex);
+
+            /* First, repeatly iterate through rooms_list to find all the room
+             * that the user created. For each of these room, send RMCLOSED to
+             * all the participants. Delete only one room in each full
+             * iteration of the rooms_list
+             */
+
+            P(&rooms_mutex);
+            while(deleteroom == 1){
+                // reset the flags
+                int index = 0;
+                deleteroom = 0;
+
+                node_t* current = rooms_list.head;
+                while(current != NULL){
+                    chat_room* room_ptr = (chat_room*)(current->value);
+                    // if the user is the creater of the room
+                    if(strcmp(user_name, room_ptr->room_creater) == 0){
+                        // set the deleteroom flag to 1
+                        deleteroom = 1;
+                        // send RMCLOSED to every participant except the user
+                        // in the room, and free the participant name
+                        strcpy(room_name, room_ptr->room_name);
+                        node_t* participant = room_ptr->participants->head;
+                        while(participant != NULL){
+                            if(strcmp(user_name, participant->value) != 0){
+                                send_header.msg_len = strlen(room_name)+1;
+                                send_header.msg_type = RMCLOSED;
+                                wr_msg(participant->fd, &send_header, room_name);
+                            }
+                            free(participant->value);
+                            participant = participant->next;
+                        }
+                        // delete the participants list in the user created room
+                        deleteList(room_ptr->participants);
+                        // free everything inside the room structure
+                        free(room_ptr->room_name);
+                        free(room_ptr->room_creater);
+                        free(room_ptr->participants);
+                        break;
+                    }
+                    current = current->next;
+                    index++;
+                }
+                // delete the room using the index
+                removeByIndex(&rooms_list, index);
+
+            }
+
+            /* After deleting all the rooms created by the user,
+             * now iterate through rooms_list to leave any room
+             * the user is in.
+             */
+
+            // For each room in rooms_list, check if user is in the room.
+            // If user is in the room, remove user from the room's participants.
+            node_t* current = rooms_list.head;
+            while(current != NULL){
+                int index = 0;
+                chat_room* room_ptr = (chat_room*)(current->value);
+                node_t* participant = room_ptr->participants->head;
+                while(participant != NULL){
+                    // if the user is in the room
+                    if(strcmp(user_name, participant->value) == 0){
+                        // remove the user from the room
+                        free(participant->value);
+                        removeByIndex(room_ptr->participants, index);
+                        break;
+                    }
+                    participant = participant->next;
+                    index++;
+                }
+                current = current->next;
+            }
+            V(&rooms_mutex);
+
+            // send OK back to client
+            //send_header.msg_len = 0;
+            //send_header.msg_type = OK;
+            //wr_msg(item.client_fd, &send_header, NULL);
+
+            /* Finally, remove the user from users_list */
+            P(&users_mutex);
+            int index = 0;
+            current = users_list.head;
+            while(current != NULL){
+                if(strcmp(user_name, current->value) == 0){
+                    free(current->value);
+                    break;
+                }
+                current = current->next;
+                index++;
+            }
+            removeByIndex(&users_list, index);
+            V(&users_mutex);
+
+            // send OK back to client
+            send_header.msg_len = 0;
+            send_header.msg_type = OK;
+            wr_msg(user_fd, &send_header, NULL);
+
+            //close(user_fd);
+
             continue;
         }
 
@@ -473,7 +593,7 @@ void *job_thread(void* vargp){
             }
 
             int msg_size = 0;
-            char msg_body[1024];
+            char msg_body[BUFFER_SIZE];
             bzero(&msg_body, sizeof(msg_body));
 
             // for every room in room_list
@@ -481,7 +601,7 @@ void *job_thread(void* vargp){
                 chat_room* room_ptr = (chat_room*)(current->value);
                 // concatenate the room name to msg_body
                 strcat(msg_body, room_ptr->room_name);
-                strcat(msg_body, ":");
+                strcat(msg_body, ": ");
                 msg_size = msg_size + strlen(room_ptr->room_name) + 1;
                 // for every participant in the room
                 node_t* participant = room_ptr->participants->head;
@@ -507,6 +627,8 @@ void *job_thread(void* vargp){
             msg_size = msg_size + 1;
 
             // FOR DEBUG ONLY: printing roomlist to server
+            printf("roomsize1: %d\n", msg_size);
+            printf("roomsize2: %ld\n", strlen(msg_body));
             printf("roomlist:\n%s", msg_body);
 
             send_header.msg_len = msg_size;
@@ -664,7 +786,7 @@ void *job_thread(void* vargp){
              * server responds to from_user "OK"
              * msg looks like  <roomname>\r\n<message>...
              * then, from server to clients joined the room
-             * 
+             *
              * RMSEND: <to_username>\r\n<message>
              * RMRECV: receive message from a user in room.
              * <roomname>\r\n<from_username>\r\n<message>
@@ -687,11 +809,11 @@ void *job_thread(void* vargp){
              */
             int roomexist = 0;
             // P(&rooms_mutex);             Mutex is necessary? (Not an urgent issue at all)
-            
+
             /* RM already exisit check.
              * this while-loop function is to check and flag.
              */
-            
+
             node_t* current = rooms_list.head;
             while(current != NULL){
                 // if the room name already exists in rooms_list
@@ -701,9 +823,9 @@ void *job_thread(void* vargp){
                 }
                 current = current->next;
             }
-            
+
             // V(&rooms_mutex);              Mutex is necessary? (Not an urgent issue at all)
-            
+
             /* Using the value processed above
              * determine whether RM exists or not
              */
@@ -711,10 +833,10 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = ERMNOTFOUND;
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
-                continue;    
+                continue;
             }
-            
-            /* 
+
+            /*
              * RM exists, but sender is not the participants of the RM.
              * send ERMDENIED to from_username
              * (this should never happen using our client. just in case for any future)
@@ -723,13 +845,13 @@ void *job_thread(void* vargp){
 
             char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
             int msg_len = strlen(room_name) + 2 + strlen(from_username) + 2 + strlen(msg_content);
-            
+
             printf("room_name, from_username, msg_content is %s %s %s\n", room_name, from_username, msg_content);
 
             /* making msg to send to room_name
              * <roomname>\r\n<from_username>\r\n<message>
              */
-            
+
             char buf[msg_len];
             bzero(&buf, sizeof(buf));
             strcat(buf, room_name);
@@ -743,7 +865,7 @@ void *job_thread(void* vargp){
             send_header.msg_len = 0;
             send_header.msg_type = OK;
             int retval1 = wr_msg(from_user_fd, &send_header, NULL);
-            
+
             // update recv_header for to_username
             recv_header.msg_len = msg_len;
             recv_header.msg_type = RMRECV;
@@ -754,7 +876,7 @@ void *job_thread(void* vargp){
              */
             chat_room* room_ptr = (chat_room*)(current->value);
             node_t* participant = room_ptr->participants->head;
-            
+
             while(participant != NULL){
                 if(strcmp(from_username, ((char*)(participant->value))) !=0){
                     // printf("participant: %s\n", ((char*)(participant->value)));
@@ -821,7 +943,7 @@ void *job_thread(void* vargp){
                 send_header.msg_type = ESERV;
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
                 // printf("retval: %d\n", retval);
-                
+
                 /* Same concern like EUSRNOTFOUND
                  * nothing we can do other than making server send this
                  * msg to from_username
@@ -929,6 +1051,7 @@ void run_server(int server_port, int number_job_thread) {
     /* initialize global shared resources. setup semaphore for user name */
     Sem_init(&users_mutex, 0, 1);
     Sem_init(&rooms_mutex, 0, 1);
+    //Sem_init(&jobjob, 0, 1);
 
     users_list.head = NULL;
     users_list.length = 0;
