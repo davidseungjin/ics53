@@ -131,7 +131,7 @@ int server_init(int server_port) {
         printf("Socket creation failed...\n");
         exit(EXIT_FAILURE);
     } else {
-        printf("Socket successfully created\n");
+        //printf("Socket successfully created\n");
     }
 
     /* fill zero at servaddr structure */
@@ -154,7 +154,7 @@ int server_init(int server_port) {
         printf("Socket bind failed\n");
         exit(EXIT_FAILURE);
     } else {
-        printf("Socket successfully binded\n");
+        //printf("Socket successfully binded\n");
     }
 
     /* Now server is ready to listen and verification */
@@ -239,7 +239,7 @@ void *process_client(void *clientfd_ptr) {
          * Pass by value, and forget about the rd_msgheader function.
          */
 
-        printf("New job inserted\n");
+        //printf("New job inserted\n");
         sbuf_insert(&job_buffer, client_fd, recv_header, buffer);
 
         if(recv_header.msg_type == LOGOUT){
@@ -248,7 +248,7 @@ void *process_client(void *clientfd_ptr) {
     }
 
     /* Close the socket at the end */
-    printf("Close one client connection\n");
+    //printf("Close one client connection\n");
     close(client_fd);
     return NULL;
 }
@@ -271,10 +271,10 @@ void *job_thread(void* vargp){
         /* Once you took client_fd, header, msg... DO SOMETHING !!!!! */
         /* declare message header for receiving via petr protocol */
 
-        printf("job_thread: item.msg is %s\n", item.msg);
-        printf("job_thread: item.client_fd is %d\n", item.client_fd);
-        printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
-        printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
+        //printf("job_thread: item.msg is %s\n", item.msg);
+        //printf("job_thread: item.client_fd is %d\n", item.client_fd);
+        //printf("job_thread: item.header.msg_type %d\n", item.header.msg_type);
+        //printf("job_thread: item.header.msg_len %d\n", item.header.msg_len);
 
         /* declare mssage header for sending via petr protocaol */
         petr_header send_header;
@@ -295,7 +295,6 @@ void *job_thread(void* vargp){
         // ESERV: generic error
 
         if(item.header.msg_type == LOGOUT){
-            printf("JOB thread: Logout case\n");
             /*
             when from_user send logout,
             server send "OK" to from_user
@@ -481,9 +480,9 @@ void *job_thread(void* vargp){
                 V(&rooms_mutex);
 
                 // FOR DEBUG ONLY: printing room creation to server
-                printf("create room:\n");
-                printf("room_name: %s\n", room_name);
-                printf("room_creater: %s\n", user_name);
+                //printf("create room:\n");
+                //printf("room_name: %s\n", room_name);
+                //printf("room_creater: %s\n", user_name);
             }
             continue;
         }
@@ -569,7 +568,7 @@ void *job_thread(void* vargp){
                 wr_msg(item.client_fd, &send_header, NULL);
 
                 // FOR DEBUG ONLY: printing room deletion to server
-                printf("room delete: %s\n", room_name);
+                //printf("room delete: %s\n", room_name);
             }
             V(&rooms_mutex);
 
@@ -627,7 +626,7 @@ void *job_thread(void* vargp){
             msg_size = msg_size + 1;
 
             // FOR DEBUG ONLY: printing roomlist to server
-            printf("roomlist:\n%s", msg_body);
+            //printf("roomlist:\n%s", msg_body);
 
             send_header.msg_len = msg_size;
             send_header.msg_type = RMLIST;
@@ -692,7 +691,7 @@ void *job_thread(void* vargp){
                 wr_msg(item.client_fd, &send_header, NULL);
 
                 // FOR DEBUG ONLY: printing room join to server
-                printf("user %s joins room %s\n", user_name, room_name);
+                //printf("user %s joins room %s\n", user_name, room_name);
             }
 
             continue;
@@ -799,7 +798,7 @@ void *job_thread(void* vargp){
              */
 
             char* room_name = strtok_r(item.msg, "\r\n", &(item.msg));
-            printf("room_name: %s\n", room_name);
+            //printf("room_name: %s\n", room_name);
 
             /* This is room already existence check. there are same iterations
              * in many different function.
@@ -842,9 +841,9 @@ void *job_thread(void* vargp){
              */
 
             char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
-            int msg_len = strlen(room_name) + 2 + strlen(from_username) + 2 + strlen(msg_content);
+            int msg_len = strlen(room_name) + 2 + strlen(from_username) + 2 + strlen(msg_content) + 1;
 
-            printf("room_name, from_username, msg_content is %s %s %s\n", room_name, from_username, msg_content);
+            //printf("room_name, from_username, msg_content is %s %s %s\n", room_name, from_username, msg_content);
 
             /* making msg to send to room_name
              * <roomname>\r\n<from_username>\r\n<message>
@@ -907,7 +906,7 @@ void *job_thread(void* vargp){
              */
 
             char* to_username = strtok_r(item.msg, "\r\n", &(item.msg));
-            printf("to_username: %s\n", to_username);
+            //printf("to_username: %s\n", to_username);
 
             int to_user_fd = find_fd_by_name(&users_list, to_username);
             // printf("2. to_username: %s\n", to_username);
@@ -952,7 +951,7 @@ void *job_thread(void* vargp){
 
             char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
 
-            int msg_len = strlen(from_username) + 2 + strlen(msg_content);
+            int msg_len = strlen(from_username) + 2 + strlen(msg_content) + 1;
             // printf("3. msg_content: %s\n", msg_content);
             // printf("3. msg length: %d\n", msg_len);
 
