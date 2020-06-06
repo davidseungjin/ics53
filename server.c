@@ -320,7 +320,6 @@ void *job_thread(void* vargp){
              * all the participants. Delete only one room in each full
              * iteration of the rooms_list
              */
-
             P(&rooms_mutex);
             while(deleteroom == 1){
                 // reset the flags
@@ -351,8 +350,8 @@ void *job_thread(void* vargp){
                         deleteList(room_ptr->participants);
                         // free everything inside the room structure
                         free(room_ptr->room_name);
-                        free(room_ptr->room_creater);
                         free(room_ptr->participants);
+                        free(room_ptr);
                         break;
                     }
                     current = current->next;
@@ -450,11 +449,11 @@ void *job_thread(void* vargp){
                 /* create new strings and new spaces in the memory
                    so the strings won't get overwritten
                  */
-                char* room_name = malloc(1000);
+                char* room_name = malloc(BUFFER_SIZE);
                 strcpy(room_name, item.msg);
 
                 char* user = find_name_by_fd(&users_list, item.client_fd);
-                char* user_name = malloc(1000);
+                char* user_name = malloc(BUFFER_SIZE);
                 strcpy(user_name, user);
 
                 int user_fd = item.client_fd;
@@ -527,8 +526,8 @@ void *job_thread(void* vargp){
                         deleteList(room_ptr->participants);
                         // free everything inside the room structure
                         free(room_ptr->room_name);
-                        free(room_ptr->room_creater);
                         free(room_ptr->participants);
+                        free(room_ptr);
                         // est the flag for room remove
                         roomremove = 1;
 
@@ -642,7 +641,7 @@ void *job_thread(void* vargp){
             int user_fd = item.client_fd;
 
             char* user = find_name_by_fd(&users_list, item.client_fd);
-            char* user_name = malloc(1000);
+            char* user_name = malloc(BUFFER_SIZE);
             strcpy(user_name, user);
 
 
@@ -906,7 +905,7 @@ void *job_thread(void* vargp){
              */
 
             char* to_username = strtok_r(item.msg, "\r\n", &(item.msg));
-            //printf("to_username: %s\n", to_username);
+            printf("to_username: %s\n", to_username);
 
             int to_user_fd = find_fd_by_name(&users_list, to_username);
             // printf("2. to_username: %s\n", to_username);
@@ -952,8 +951,8 @@ void *job_thread(void* vargp){
             char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
 
             int msg_len = strlen(from_username) + 2 + strlen(msg_content) + 1;
-            // printf("3. msg_content: %s\n", msg_content);
-            // printf("3. msg length: %d\n", msg_len);
+            printf("3. msg_content: %s\n", msg_content);
+            printf("3. msg length: %d\n", msg_len);
 
 
             /* making msg to send to to_username */
@@ -975,7 +974,7 @@ void *job_thread(void* vargp){
             recv_header.msg_type = USRRECV;
 
             int retval2 = wr_msg(to_user_fd, &recv_header, buf);
-            // printf("buf for wr_msg: %s\n", buf);
+            //printf("buf for wr_msg: %s\n", buf);
 
             continue;
         }
@@ -987,6 +986,15 @@ void *job_thread(void* vargp){
             bzero(&msg, sizeof(msg));
             node_t* current = users_list.head;
 
+            // if user is the only one in the users_list,
+            // then send USRLIST with empty message
+            if(users_list.length == 1){
+                send_header.msg_len = 0;
+                send_header.msg_type = USRLIST;
+                wr_msg(from_user_fd, &send_header, NULL);
+                continue;
+            }
+
             while(current != NULL){
                 if(strcmp((char*)(current->value), from_username) == 0){
                     current = current->next;
@@ -996,11 +1004,8 @@ void *job_thread(void* vargp){
                 strcat(msg, "\n");
                 current = current -> next;
             }
-            if((strlen(msg) > 0)&&(msg[strlen(msg)-1] == '\n')){
-                msg[strlen(msg)-1] = 0;
-            }
 
-            send_header.msg_len = strlen(from_username) + strlen(msg);
+            send_header.msg_len = strlen(msg) + 1;
             send_header.msg_type = USRLIST;
 
             // temprary for checking msg sending to client.
