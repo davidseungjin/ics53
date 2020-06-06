@@ -175,6 +175,8 @@ void *process_client(void *clientfd_ptr) {
 
     /* declare return value */
     int retval;
+    /* flag to check if the last message is LOGOUT */
+    int logout = 0;
 
     /* declare message header for receiving via petr protocol */
     petr_header recv_header;
@@ -190,6 +192,7 @@ void *process_client(void *clientfd_ptr) {
          * bzero is to clear recv_header buffer before receiving data.
          */
         bzero(&recv_header, sizeof(recv_header));
+
         retval = rd_msgheader(client_fd, &recv_header);
         if (retval < 0) {
             printf("Reading message header failed\n");
@@ -202,7 +205,17 @@ void *process_client(void *clientfd_ptr) {
          * hence the client connection is closed.
          */
         if(recv_header.msg_type == 0 && recv_header.msg_len == 0){
-            printf("Reading message header failed\n");
+            /* If the client did not logout properly,
+             * send LOGOUT to job buffer to remove user properly.
+             * Set msg_len to -1 so the job_thread won't send OK message
+             * back to the closed client.
+             */
+            if(logout != 1){
+                recv_header.msg_len = -1;
+                recv_header.msg_type = LOGOUT;
+                sbuf_insert(&job_buffer, client_fd, recv_header, NULL);
+            }
+            printf("Client closes connection\n");
             break;
         }
 
@@ -243,10 +256,14 @@ void *process_client(void *clientfd_ptr) {
         //printf("New job inserted\n");
         sbuf_insert(&job_buffer, client_fd, recv_header, buffer);
 
+        if(recv_header.msg_type == LOGOUT){
+            logout = 1;
+        }
+
     }
 
     /* Close the socket at the end */
-    printf("Close one client connection\n");
+    printf("Server closes connection to client\n");
     close(client_fd);
     return NULL;
 }
@@ -386,7 +403,6 @@ void *job_thread(void* vargp){
             }
             V(&rooms_mutex);
 
-            
             /* Finally, remove the user from users_list */
             P(&users_mutex);
             int index = 0;
@@ -402,15 +418,15 @@ void *job_thread(void* vargp){
             removeByIndex(&users_list, index);
             V(&users_mutex);
 
-            /* send OK back to client
+            /* send OK back to client if the client did not force-terminate
              * send_header.msg_len = 0;
              * send_header.msg_type = OK;
              */
-            send_header.msg_len = 0;
-            send_header.msg_type = OK;
-            wr_msg(user_fd, &send_header, NULL);
-
-            //close(user_fd);
+            if(item.header.msg_len != -1){
+                send_header.msg_len = 0;
+                send_header.msg_type = OK;
+                wr_msg(user_fd, &send_header, NULL);
+            }
 
             continue;
         }
