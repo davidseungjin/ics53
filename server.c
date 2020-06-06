@@ -175,8 +175,6 @@ void *process_client(void *clientfd_ptr) {
 
     /* declare return value */
     int retval;
-    /* flag for logout and terminating the client_thread */
-    int logout = 0;
 
     /* declare message header for receiving via petr protocol */
     petr_header recv_header;
@@ -191,9 +189,19 @@ void *process_client(void *clientfd_ptr) {
          * retval is just to see status of transit
          * bzero is to clear recv_header buffer before receiving data.
          */
-        bzero(&recv_header, sizeof(recv_header)); 
+        bzero(&recv_header, sizeof(recv_header));
         retval = rd_msgheader(client_fd, &recv_header);
         if (retval < 0) {
+            printf("Reading message header failed\n");
+            break;
+        }
+
+        /* Check the value of the header.
+         * If the header has a msg_type of 0 and a msg_len of 0,
+         * that means the header did not read in new informations,
+         * hence the client connection is closed.
+         */
+        if(recv_header.msg_type == 0 && recv_header.msg_len == 0){
             printf("Reading message header failed\n");
             break;
         }
@@ -223,12 +231,6 @@ void *process_client(void *clientfd_ptr) {
 
         V(&buffer_mutex);
 
-        // if the last message was LOGOUT, break and end this client thread
-        // so no more new jobs will be inserted to the job buffer
-        if(logout == 1){
-            break;
-        }
-
         /* using sbuf producer-consumer system
          * 1. store data in buf: client_fd, header, msg stored in buffer
          * 2. circular array to make FIFO.
@@ -241,13 +243,10 @@ void *process_client(void *clientfd_ptr) {
         //printf("New job inserted\n");
         sbuf_insert(&job_buffer, client_fd, recv_header, buffer);
 
-        if(recv_header.msg_type == LOGOUT){
-            logout = 1;
-        }
     }
 
     /* Close the socket at the end */
-    //printf("Close one client connection\n");
+    printf("Close one client connection\n");
     close(client_fd);
     return NULL;
 }
