@@ -851,7 +851,7 @@ void *job_thread(void* vargp){
              * Because this doesn't happen as long as we use current client, so skip implementation if necessary.
              */
 
-            char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
+            char* msg_content = strchr(item.msg, '\n') + 1;
             int msg_len = strlen(room_name) + 2 + strlen(from_username) + 2 + strlen(msg_content) + 1;
 
             //printf("room_name, from_username, msg_content is %s %s %s\n", room_name, from_username, msg_content);
@@ -867,6 +867,7 @@ void *job_thread(void* vargp){
             strcat(buf, from_username);
             strcat(buf, "\r\n");
             strcat(buf, msg_content);
+            buf[strlen(buf)] = '\0';
 
             // P(&rooms_mutex);
             // sending to from_username "OK" when successfully received
