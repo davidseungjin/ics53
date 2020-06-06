@@ -917,7 +917,8 @@ void *job_thread(void* vargp){
              */
 
             char* to_username = strtok_r(item.msg, "\r\n", &(item.msg));
-            printf("to_username: %s\n", to_username);
+            // printf("to_username: %s\n", to_username);
+            char* msg_content = strchr(item.msg, '\n') + 1;
 
             int to_user_fd = find_fd_by_name(&users_list, to_username);
             // printf("2. to_username: %s\n", to_username);
@@ -960,21 +961,20 @@ void *job_thread(void* vargp){
                 continue;
             }
 
-            char* msg_content = strtok_r(item.msg, "\r\n", &(item.msg));
-
-            int msg_len = strlen(from_username) + 2 + strlen(msg_content) + 1;
-            printf("3. msg_content: %s\n", msg_content);
-            printf("3. msg length: %d\n", msg_len);
+            
+            int msg_len = strlen(from_username) + 2 + strlen(msg_content)+1;
+            // printf("3. msg_content: %s\n", msg_content);
+            // printf("3. msg length: %d\n", msg_len);
 
 
             /* making msg to send to to_username */
             char buf[msg_len];
             bzero(&buf, sizeof(buf));
             strcat(buf, from_username);
-            strcat(buf, "\r\n");
+            strcat(buf, "\r");
+            strcat(buf, "\n");
             strcat(buf, msg_content);
-            // strcat(buf, "\0");
-
+            buf[strlen(buf)] = '\0';
             // sending to from_username "OK" when successfully received
             send_header.msg_len = 0;
             send_header.msg_type = OK;
