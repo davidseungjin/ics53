@@ -30,9 +30,6 @@ sem_t audit_mutex;
 /* 4: JOB BUFFER */
 sbuf_t job_buffer;
 
-/* 5: general purpose?: for check at JOB THREAD */
-//sem_t jobjob;           //maybe not necessary
-
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
 void Sem_init(sem_t *sem, int pshared, unsigned int value) {
@@ -192,7 +189,9 @@ void *process_client(void *clientfd_ptr) {
          * First: receive msg to clienf_fd.
          * The data contained is msg type and length. into recv_header
          * retval is just to see status of transit
+         * bzero is to clear recv_header buffer before receiving data.
          */
+        bzero(&recv_header, sizeof(recv_header)); 
         retval = rd_msgheader(client_fd, &recv_header);
         if (retval < 0) {
             printf("Reading message header failed\n");
@@ -303,7 +302,6 @@ void *job_thread(void* vargp){
             if: from_user is creater of rooms. --> send participants RMCLOSED; RMDELETE this room (Does it need OK to from_user again?)
             AFTER these two --> from_user will be deleted from user_list.
             */
-
             P(&users_mutex);
             // flag used to keep track if there are any more room to delete
             // in rooms_list
@@ -389,11 +387,7 @@ void *job_thread(void* vargp){
             }
             V(&rooms_mutex);
 
-            // send OK back to client
-            //send_header.msg_len = 0;
-            //send_header.msg_type = OK;
-            //wr_msg(item.client_fd, &send_header, NULL);
-
+            
             /* Finally, remove the user from users_list */
             P(&users_mutex);
             int index = 0;
@@ -409,7 +403,10 @@ void *job_thread(void* vargp){
             removeByIndex(&users_list, index);
             V(&users_mutex);
 
-            // send OK back to client
+            /* send OK back to client
+             * send_header.msg_len = 0;
+             * send_header.msg_type = OK;
+             */
             send_header.msg_len = 0;
             send_header.msg_type = OK;
             wr_msg(user_fd, &send_header, NULL);
@@ -1053,7 +1050,6 @@ void run_server(int server_port, int number_job_thread) {
     /* initialize global shared resources. setup semaphore for user name */
     Sem_init(&users_mutex, 0, 1);
     Sem_init(&rooms_mutex, 0, 1);
-    //Sem_init(&jobjob, 0, 1);
 
     users_list.head = NULL;
     users_list.length = 0;
