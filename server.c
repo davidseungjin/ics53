@@ -107,8 +107,6 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 }
 
 
-
-
 /* Handler to clean up in case of "Ctrl-C" */
 void sigint_handler(int sig) {
     printf("\nshutting down server\n");
@@ -472,6 +470,9 @@ void *job_thread(void* vargp){
 
                 // create new linked list for the partcipants in the room
                 List_t* participants = malloc(sizeof(List_t));
+                // initialize the linked list
+                participants->head = NULL;
+                participants->length = 0;
                 // add the creater to the linked list
                 insertRear(participants, (void*)user_name, user_fd);
 
@@ -958,11 +959,9 @@ void *job_thread(void* vargp){
                  * nothing we can do other than making server send this
                  * msg to from_username
                  */
-
                 continue;
             }
 
-            
             int msg_len = strlen(from_username) + 2 + strlen(msg_content)+1;
             // printf("3. msg_content: %s\n", msg_content);
             // printf("3. msg length: %d\n", msg_len);
@@ -1086,7 +1085,7 @@ void run_server(int server_port, int number_job_thread) {
     /* from accepting, user check */
     while (1) {
         user_exist = 0;
-        user_name = malloc(sizeof(char));
+        user_name = malloc(BUFFER_SIZE);
 
         /* Wait and Accept the connection from client
          * in some other books, it says connfd because connected fd on server
