@@ -30,6 +30,12 @@ sem_t audit_mutex;
 /* 4: JOB BUFFER */
 sbuf_t job_buffer;
 
+/* 5: Variables for the server thread */
+char* client_name;
+int* client_fd;
+
+/* 6: Pointer to the job_thread tid array */
+pthread_t* job_thread_array_ptr;
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
 void Sem_init(sem_t *sem, int pshared, unsigned int value) {
@@ -107,11 +113,11 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 }
 
 
-/* Handler to clean up in case of "Ctrl-C" */
+/* Handler to clean up in case of "ctrl-c" on server */
 void sigint_handler(int sig) {
     printf("\nshutting down server\n");
 
-    // remove and free everything in rooms_list
+    // Remove and free everything in rooms_list
     node_t* current = rooms_list.head;
     while(current != NULL){
         chat_room* room_ptr = (chat_room*)(current->value);
@@ -129,7 +135,7 @@ void sigint_handler(int sig) {
     }
     deleteList(&rooms_list);
 
-    // remove and free everything in users_list
+    // Remove and free everything in users_list
     current = users_list.head;
     while(current != NULL){
         free(current->value);
@@ -137,6 +143,17 @@ void sigint_handler(int sig) {
     }
     deleteList(&users_list);
 
+    // Clean up all the job_threads
+    // int array_size = sizeof(job_thread_array_ptr) / sizeof(pthread_t);
+    // the number of iteration is not working, so I hard coded the 2
+    for(int i=0; i < 2; i++){
+        printf("job thread tid: %ld\n", job_thread_array_ptr[i]);
+        pthread_cancel(job_thread_array_ptr[i]);
+    }
+
+    // Close any file descriptors and free any allocatd memories
+    free(client_name);
+    free(client_fd);
     close(listen_fd);
     sbuf_deinit(&job_buffer);
     bzero(&job_buffer, sizeof(job_buffer));
@@ -297,6 +314,7 @@ void *process_client(void *clientfd_ptr) {
 /* Job thread function*/
 void *job_thread(void* vargp){
     pthread_detach(pthread_self());
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
     // printf("job_thread is doing, thread ID is %ld\n", pthread_self());
     while(1){
 
@@ -1079,13 +1097,15 @@ void run_server(int server_port, int number_job_thread) {
     V(&audit_mutex);
 
     /* create new local variables. */
+
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     // change type from int to socklen_t
 
     int retval = 0;
     int user_exist = 0;
-    char* user_name = NULL;
+    client_name = NULL;
+    client_fd = NULL;
     pthread_t tid;
 
     petr_header login_header;
@@ -1103,25 +1123,34 @@ void run_server(int server_port, int number_job_thread) {
     rooms_list.head = NULL;
     rooms_list.head = 0;
 
-    /* create N job threads and update audit log */
+    /* create an array of size N to hold all the job threads' tid */
+    pthread_t job_thread_array[number_job_thread];
+
+    /* create N job threads and store each job thread's tid into array
+     * update audit log */
     P(&audit_mutex);
     audit_fp = fopen(audit_log, "a");
     for(int i = 0; i < number_job_thread; i++){
         pthread_create(&tid, NULL, job_thread, NULL);
+        job_thread_array[i] = tid;
+        printf("create job thread: %ld\n", job_thread_array[i]);
+
         fprintf(audit_fp, "%ld\tCreate job thread #%d\n", time(NULL), i);
     }
     fclose(audit_fp);
     V(&audit_mutex);
 
+    job_thread_array_ptr = job_thread_array;
+
     /* from accepting, user check */
     while (1) {
         user_exist = 0;
-        user_name = malloc(BUFFER_SIZE);
+        client_name = malloc(BUFFER_SIZE);
 
         /* Wait and Accept the connection from client
          * in some other books, it says connfd because connected fd on server
          */
-        int *client_fd = malloc(sizeof(int));
+        client_fd = malloc(sizeof(int));
         *client_fd = accept(listen_fd, (SA *)&client_addr, &client_addr_len);
         printf("*client_fd is %d\n", *client_fd);
 
@@ -1145,7 +1174,7 @@ void run_server(int server_port, int number_job_thread) {
 
             /* read the message body (username) from the new client */
             bzero(buffer, BUFFER_SIZE);
-            retval = read(*client_fd, user_name, login_header.msg_len);
+            retval = read(*client_fd, client_name, login_header.msg_len);
             if (retval < 0) {
                 printf("Receiving failed\n");
                 exit(EXIT_FAILURE);
@@ -1155,7 +1184,7 @@ void run_server(int server_port, int number_job_thread) {
             P(&audit_mutex);
             audit_fp = fopen(audit_log, "a");
             fprintf(audit_fp, "%ld\tReceive message from client on main thread\n\t\t\t" \
-                              "msg_type: 0x%x\tmsg_body: %s\n", time(NULL),login_header.msg_type, user_name); 
+                              "msg_type: 0x%x\tmsg_body: %s\n", time(NULL),login_header.msg_type, client_name);
             fclose(audit_fp);
             V(&audit_mutex);
 
@@ -1173,7 +1202,7 @@ void run_server(int server_port, int number_job_thread) {
                      * is it necessary to use strcmp or strncmp instead of logical
                      * operator equal ?
                      */
-                    if(strcmp( ((char*)(current->value)), user_name ) == 0){
+                    if(strcmp( ((char*)(current->value)), client_name ) == 0){
                         user_exist = 1;
                         reply_header.msg_len = 0;
                         reply_header.msg_type = EUSREXISTS;
@@ -1190,19 +1219,19 @@ void run_server(int server_port, int number_job_thread) {
                 }
                 // continue and wait for new client if user name already exists
                 if(user_exist == 1){
-                    free(user_name);
+                    free(client_name);
                     V(&users_mutex);
                     printf("User name already exists\n");
                     continue;
                 }
                 /* if username did not exist, add username to linked list. UNORDERED */
-                insertRear(&users_list, (void*)user_name, *client_fd);
+                insertRear(&users_list, (void*)client_name, *client_fd);
 
                 // update audit log
                 P(&audit_mutex);
                 audit_fp = fopen(audit_log, "a");
                 fprintf(audit_fp, "%ld\tClient successfully logged in\n\t\t\t" \
-                        "Username: %s\tUserFD: %d\n", time(NULL), user_name, *client_fd);
+                        "Username: %s\tUserFD: %d\n", time(NULL), client_name, *client_fd);
                 fclose(audit_fp);
                 V(&audit_mutex);
 
