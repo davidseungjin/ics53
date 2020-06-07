@@ -35,6 +35,7 @@ char* client_name;
 int* client_fd;
 
 /* 6: Pointer to the job_thread tid array */
+int N;
 pthread_t* job_thread_array_ptr;
 
 /* sem_init wrapper function: Be careful that this begins with 'S' */
@@ -144,9 +145,7 @@ void sigint_handler(int sig) {
     deleteList(&users_list);
 
     // Clean up all the job_threads
-    // int array_size = sizeof(job_thread_array_ptr) / sizeof(pthread_t);
-    // the number of iteration is not working, so I hard coded the 2
-    for(int i=0; i < 2; i++){
+    for(int i=0; i < N; i++){
         printf("job thread tid: %ld\n", job_thread_array_ptr[i]);
         pthread_cancel(job_thread_array_ptr[i]);
     }
@@ -206,7 +205,7 @@ int server_init(int server_port) {
     return sockfd;
 }
 
-//Function running in client thread
+//Function running in client thready
 void *process_client(void *clientfd_ptr) {
     /* After finishing work, automatically terminate instead of join to mainthread */
     pthread_detach(pthread_self());
@@ -314,7 +313,7 @@ void *process_client(void *clientfd_ptr) {
 /* Job thread function*/
 void *job_thread(void* vargp){
     pthread_detach(pthread_self());
-    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+
     // printf("job_thread is doing, thread ID is %ld\n", pthread_self());
     while(1){
 
@@ -1272,7 +1271,7 @@ void run_server(int server_port, int number_job_thread) {
 
 int main(int argc, char *argv[]) {
     int opt;
-    int N = 2;
+    N = 2;
     unsigned int port = 0;
 
     while ((opt = getopt(argc, argv, "hj:")) != -1) {
