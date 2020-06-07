@@ -118,7 +118,7 @@ int find_fd_by_name(List_t* list, char* name){
     // char mytarget[] = "target";
     for(ptr = list->head; ptr != NULL; ptr = ptr->next){
         if(strcmp(ptr->value, name)==0){
-            printf("found\n");
+            // printf("found\n");
             // printf("it's next val is %s\n", ptr->next->value);
             return ptr->fd;
         }
@@ -132,7 +132,7 @@ char* find_name_by_fd(List_t* list, int fd){
 
     for(ptr = list->head; ptr != NULL; ptr = ptr->next){
         if(ptr->fd == fd){
-            printf("found\n");
+            // printf("found\n");
             // printf("it's next val is %s\n", ptr->next->value);
             return ptr->value;
         }
