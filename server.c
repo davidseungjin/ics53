@@ -111,8 +111,35 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 void sigint_handler(int sig) {
     printf("\nshutting down server\n");
 
+    // remove and free everything in rooms_list
+    node_t* current = rooms_list.head;
+    while(current != NULL){
+        chat_room* room_ptr = (chat_room*)(current->value);
+        node_t* participant = room_ptr->participants->head;
+        while(participant != NULL){
+            free(participant->value);
+            participant = participant->next;
+        }
+        deleteList(room_ptr->participants);
+        free(room_ptr->room_name);
+        free(room_ptr->participants);
+        free(room_ptr);
+
+        current = current->next;
+    }
+    deleteList(&rooms_list);
+
+    // remove and free everything in users_list
+    current = users_list.head;
+    while(current != NULL){
+        free(current->value);
+        current = current->next;
+    }
+    deleteList(&users_list);
+
     close(listen_fd);
     sbuf_deinit(&job_buffer);
+    bzero(&job_buffer, sizeof(job_buffer));
     exit(0);
 }
 
@@ -178,6 +205,7 @@ void *process_client(void *clientfd_ptr) {
 
     /* declare message header for receiving via petr protocol */
     petr_header recv_header;
+    bzero(&recv_header, sizeof(petr_header));
 
     Sem_init(&buffer_mutex, 0, 1);
 
@@ -291,10 +319,12 @@ void *job_thread(void* vargp){
 
         /* declare mssage header for sending via petr protocaol */
         petr_header send_header;
+        bzero(&send_header, sizeof(petr_header));
         send_header.msg_len = 0;
         send_header.msg_type = OK;
 
         petr_header recv_header;
+        bzero(&recv_header, sizeof(petr_header));
         recv_header.msg_len = 0;
         recv_header.msg_type = OK;
 
@@ -1049,7 +1079,6 @@ void run_server(int server_port, int number_job_thread) {
     V(&audit_mutex);
 
     /* create new local variables. */
-    int client_fd;
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     // change type from int to socklen_t
@@ -1061,6 +1090,8 @@ void run_server(int server_port, int number_job_thread) {
 
     petr_header login_header;
     petr_header reply_header;
+    bzero(&login_header, sizeof(petr_header));
+    bzero(&reply_header, sizeof(petr_header));
 
     /* initialize global shared resources. setup semaphore for user name */
     Sem_init(&users_mutex, 0, 1);
