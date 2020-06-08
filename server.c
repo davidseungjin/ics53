@@ -117,6 +117,12 @@ header_and_msg sbuf_remove(sbuf_t *sp){
 /* Handler to clean up in case of "ctrl-c" on server */
 void sigint_handler(int sig) {
     printf("\nshutting down server\n");
+    // update audit log
+    P(&audit_mutex);
+    audit_fp = fopen(audit_log, "a");
+    fprintf(audit_fp, "%ld\tServer terminates\n\n", time(NULL));
+    fclose(audit_fp);
+    V(&audit_mutex);
 
     // Remove and free everything in rooms_list
     node_t* current = rooms_list.head;
@@ -146,7 +152,7 @@ void sigint_handler(int sig) {
 
     // Clean up all the job_threads
     for(int i=0; i < N; i++){
-        printf("job thread tid: %ld\n", job_thread_array_ptr[i]);
+        //printf("job thread tid: %ld\n", job_thread_array_ptr[i]);
         pthread_cancel(job_thread_array_ptr[i]);
     }
 
@@ -241,6 +247,14 @@ void *process_client(void *clientfd_ptr) {
             break;
         }
 
+        // update audit log
+        P(&audit_mutex);
+        audit_fp = fopen(audit_log, "a");
+        fprintf(audit_fp, "%ld\tClient thread %ld receives message from client\n\t\t\t" \
+                "Header Type: 0x%x,\tHeader Length: %d\n", time(NULL), pthread_self(), recv_header.msg_type, recv_header.msg_len);
+        fclose(audit_fp);
+        V(&audit_mutex);
+
         /* Check the value of the header.
          * If the header has a msg_type of 0 and a msg_len of 0,
          * that means the header did not read in new informations,
@@ -283,8 +297,15 @@ void *process_client(void *clientfd_ptr) {
             printf("Reading message body failed\n");
             break;
         }
-
         V(&buffer_mutex);
+
+        // update audit log
+        P(&audit_mutex);
+        audit_fp = fopen(audit_log, "a");
+        fprintf(audit_fp, "%ld\tClient thread %ld reads message body\n\t\t\t" \
+                "Message Body: %s\n", time(NULL), pthread_self(), buffer);
+        fclose(audit_fp);
+        V(&audit_mutex);
 
         /* using sbuf producer-consumer system
          * 1. store data in buf: client_fd, header, msg stored in buffer
@@ -295,14 +316,27 @@ void *process_client(void *clientfd_ptr) {
          * Pass by value, and forget about the rd_msgheader function.
          */
 
-        //printf("New job inserted\n");
         sbuf_insert(&job_buffer, client_fd, recv_header, buffer);
+
+        // update audit log
+        P(&audit_mutex);
+        audit_fp = fopen(audit_log, "a");
+        fprintf(audit_fp, "%ld\tClient thread %ld inserts job to job buffer\n", time(NULL), pthread_self());
+        fclose(audit_fp);
+        V(&audit_mutex);
 
         if(recv_header.msg_type == LOGOUT){
             logout = 1;
         }
 
     }
+
+    // update audit log
+    P(&audit_mutex);
+    audit_fp = fopen(audit_log, "a");
+    fprintf(audit_fp, "%ld\tTerminate Client thread %ld\n", time(NULL), pthread_self());
+    fclose(audit_fp);
+    V(&audit_mutex);
 
     /* Close the socket at the end */
     printf("Server closes connection to client\n");
@@ -328,6 +362,15 @@ void *job_thread(void* vargp){
 
         /* Once you took client_fd, header, msg... DO SOMETHING !!!!! */
         /* declare message header for receiving via petr protocol */
+
+        // update audit log
+        P(&audit_mutex);
+        audit_fp = fopen(audit_log, "a");
+        fprintf(audit_fp, "%ld\tJob thread %ld removes job from job buffer\n\t\t\t" \
+                "ClientFD: %d,\tHeader Type: 0x%x,\tHeader Length: %d\n\t\t\t" \
+                "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, item.header.msg_type, item.header.msg_len, item.msg);
+        fclose(audit_fp);
+        V(&audit_mutex);
 
         //printf("job_thread: item.msg is %s\n", item.msg);
         //printf("job_thread: item.client_fd is %d\n", item.client_fd);
@@ -401,6 +444,15 @@ void *job_thread(void* vargp){
                                 send_header.msg_len = strlen(room_name)+1;
                                 send_header.msg_type = RMCLOSED;
                                 wr_msg(participant->fd, &send_header, room_name);
+
+                                // update audit log
+                                P(&audit_mutex);
+                                audit_fp = fopen(audit_log, "a");
+                                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                                        "Message Body: %s\n", time(NULL), pthread_self(), participant->fd, send_header.msg_type, send_header.msg_len, room_name);
+                                fclose(audit_fp);
+                                V(&audit_mutex);
                             }
                             free(participant->value);
                             participant = participant->next;
@@ -473,6 +525,15 @@ void *job_thread(void* vargp){
                 wr_msg(user_fd, &send_header, NULL);
             }
 
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+            fclose(audit_fp);
+            V(&audit_mutex);
+
             continue;
         }
 
@@ -486,12 +547,21 @@ void *job_thread(void* vargp){
             while(current != NULL){
                 // if the room name already exists in rooms_list
                 if(strcmp(item.msg, ((chat_room*)(current->value))->room_name) == 0){
-                   // sending to client error ERMEXISTS: Room exists already
-                   send_header.msg_len = 0;
-                   send_header.msg_type = ERMEXISTS;
-                   wr_msg(item.client_fd, &send_header, NULL);
-                   roomexist = 1;
-                   break;
+                    // sending to client error ERMEXISTS: Room exists already
+                    send_header.msg_len = 0;
+                    send_header.msg_type = ERMEXISTS;
+                    wr_msg(item.client_fd, &send_header, NULL);
+                    roomexist = 1;
+
+                    // update audit log
+                    P(&audit_mutex);
+                    audit_fp = fopen(audit_log, "a");
+                    fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                            "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                            "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                    fclose(audit_fp);
+                    V(&audit_mutex);
+                    break;
                 }
                 current = current->next;
             }
@@ -538,11 +608,15 @@ void *job_thread(void* vargp){
 
                 V(&rooms_mutex);
 
-                // FOR DEBUG ONLY: printing room creation to server
-                //printf("create room:\n");
-                //printf("room_name: %s\n", room_name);
-                //printf("room_creater: %s\n", user_name);
-            }
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
+                }
             continue;
         }
 
@@ -577,6 +651,15 @@ void *job_thread(void* vargp){
                                 send_header.msg_len = strlen(room_name) + 1;
                                 send_header.msg_type = RMCLOSED;
                                 wr_msg(participant->fd, &send_header, room_name);
+
+                                // update audit log
+                                P(&audit_mutex);
+                                audit_fp = fopen(audit_log, "a");
+                                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                                        "Message Body: %s\n", time(NULL), pthread_self(), participant->fd, send_header.msg_type, send_header.msg_len, room_name);
+                                fclose(audit_fp);
+                                V(&audit_mutex);
                             }
                             free(participant->value);
                             participant = participant->next;
@@ -597,6 +680,15 @@ void *job_thread(void* vargp){
                         send_header.msg_len = 0;
                         send_header.msg_type = ERMDENIED;
                         wr_msg(item.client_fd, &send_header, NULL);
+
+                        // update audit log
+                        P(&audit_mutex);
+                        audit_fp = fopen(audit_log, "a");
+                        fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                                "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                                "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                        fclose(audit_fp);
+                        V(&audit_mutex);
                     }
 
                     // set the flag for room exist
@@ -613,6 +705,15 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = ERMNOTFOUND;
                 wr_msg(item.client_fd, &send_header, NULL);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
                 continue;
             }
 
@@ -626,8 +727,14 @@ void *job_thread(void* vargp){
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
 
-                // FOR DEBUG ONLY: printing room deletion to server
-                //printf("room delete: %s\n", room_name);
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
             }
             V(&rooms_mutex);
 
@@ -647,6 +754,15 @@ void *job_thread(void* vargp){
                 send_header.msg_type = RMLIST;
                 wr_msg(item.client_fd, &send_header, NULL);
                 V(&rooms_mutex);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
                 continue;
             }
 
@@ -684,12 +800,18 @@ void *job_thread(void* vargp){
             // size + 1 for the null terminator at the end
             msg_size = msg_size + 1;
 
-            // FOR DEBUG ONLY: printing roomlist to server
-            //printf("roomlist:\n%s", msg_body);
-
             send_header.msg_len = msg_size;
             send_header.msg_type = RMLIST;
             wr_msg(item.client_fd, &send_header, msg_body);
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, msg_body);
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             continue;
         }
@@ -748,10 +870,16 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
-
-                // FOR DEBUG ONLY: printing room join to server
-                //printf("user %s joins room %s\n", user_name, room_name);
             }
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             continue;
         }
@@ -794,9 +922,14 @@ void *job_thread(void* vargp){
                                 send_header.msg_type = OK;
                                 wr_msg(item.client_fd, &send_header, NULL);
 
-                                // FOR DEBUG ONLY: printing room leave to server
-                                printf("user %s leaves room %s\n", user_name, room_name);
-                                break;
+                                // update audit log
+                                P(&audit_mutex);
+                                audit_fp = fopen(audit_log, "a");
+                                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                                fclose(audit_fp);
+                                V(&audit_mutex);
 
                             // else if the user is in the room but is the creater
                             }else{
@@ -804,6 +937,15 @@ void *job_thread(void* vargp){
                                 send_header.msg_len = 0;
                                 send_header.msg_type = ERMDENIED;
                                 wr_msg(item.client_fd, &send_header, NULL);
+
+                                // update audit log
+                                P(&audit_mutex);
+                                audit_fp = fopen(audit_log, "a");
+                                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                                        "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+                                fclose(audit_fp);
+                                V(&audit_mutex);
                                 break;
                             }
                         }
@@ -830,6 +972,15 @@ void *job_thread(void* vargp){
                 send_header.msg_type = OK;
                 wr_msg(item.client_fd, &send_header, NULL);
             }
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), item.client_fd, send_header.msg_type, send_header.msg_len, "");
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             continue;
         }
@@ -864,7 +1015,7 @@ void *job_thread(void* vargp){
              * may need to determine on separating to helper function.
              */
             int roomexist = 0;
-            // P(&rooms_mutex);             Mutex is necessary? (Not an urgent issue at all)
+            P(&rooms_mutex);
 
             /* RM already exisit check.
              * this while-loop function is to check and flag.
@@ -880,7 +1031,7 @@ void *job_thread(void* vargp){
                 current = current->next;
             }
 
-            // V(&rooms_mutex);              Mutex is necessary? (Not an urgent issue at all)
+            V(&rooms_mutex);
 
             /* Using the value processed above
              * determine whether RM exists or not
@@ -889,6 +1040,15 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = ERMNOTFOUND;
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
                 continue;
             }
 
@@ -917,11 +1077,20 @@ void *job_thread(void* vargp){
             strcat(buf, msg_content);
             buf[strlen(buf)] = '\0';
 
-            // P(&rooms_mutex);
+            P(&rooms_mutex);
             // sending to from_username "OK" when successfully received
             send_header.msg_len = 0;
             send_header.msg_type = OK;
             int retval1 = wr_msg(from_user_fd, &send_header, NULL);
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             // update recv_header for to_username
             recv_header.msg_len = msg_len;
@@ -940,6 +1109,15 @@ void *job_thread(void* vargp){
                     char* to_username = (char*)(participant->value);
                     int to_user_fd = find_fd_by_name(&users_list, to_username);
                     int retval = wr_msg(to_user_fd, &recv_header, buf);
+
+                    // update audit log
+                    P(&audit_mutex);
+                    audit_fp = fopen(audit_log, "a");
+                    fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                            "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                            "Message Body: %s\n", time(NULL), pthread_self(), to_user_fd, recv_header.msg_type, recv_header.msg_len, buf);
+                    fclose(audit_fp);
+                    V(&audit_mutex);
                 }
                 participant = participant -> next;
             }
@@ -983,6 +1161,15 @@ void *job_thread(void* vargp){
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
                 // printf("retval: %d\n", retval);
 
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
+
                 /* Need to check from prof or TA.
                  * Understood server (main, client, job thread)
                  * cannot prevent from opening xterm window
@@ -1001,6 +1188,15 @@ void *job_thread(void* vargp){
                 send_header.msg_type = ESERV;
                 int retval = wr_msg(from_user_fd, &send_header, NULL);
                 // printf("retval: %d\n", retval);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
 
                 /* Same concern like EUSRNOTFOUND
                  * nothing we can do other than making server send this
@@ -1028,12 +1224,30 @@ void *job_thread(void* vargp){
             int retval1 = wr_msg(from_user_fd, &send_header, NULL);
             // printf("retval for wr_msg: %d\n", retval);
 
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+            fclose(audit_fp);
+            V(&audit_mutex);
+
             // update recv_header for to_username
             recv_header.msg_len = msg_len;
             recv_header.msg_type = USRRECV;
 
             int retval2 = wr_msg(to_user_fd, &recv_header, buf);
             //printf("buf for wr_msg: %s\n", buf);
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), to_user_fd, recv_header.msg_type, recv_header.msg_len, buf);
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             continue;
         }
@@ -1051,6 +1265,15 @@ void *job_thread(void* vargp){
                 send_header.msg_len = 0;
                 send_header.msg_type = USRLIST;
                 wr_msg(from_user_fd, &send_header, NULL);
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
                 continue;
             }
 
@@ -1063,7 +1286,6 @@ void *job_thread(void* vargp){
                 strcat(msg, "\n");
                 current = current -> next;
             }
-
             send_header.msg_len = strlen(msg) + 1;
             send_header.msg_type = USRLIST;
 
@@ -1072,6 +1294,15 @@ void *job_thread(void* vargp){
             //     printf("i c and d is %c \t %d\n", msg[i], msg[i]);
             // }
             wr_msg(from_user_fd, &send_header, msg);
+
+            // update audit log
+            P(&audit_mutex);
+            audit_fp = fopen(audit_log, "a");
+            fprintf(audit_fp, "%ld\tJob Thread %ld sends message to client fd %d\n\t\t\t" \
+                    "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                    "Message Body: %s\n", time(NULL), pthread_self(), from_user_fd, send_header.msg_type, send_header.msg_len, msg);
+            fclose(audit_fp);
+            V(&audit_mutex);
 
             // bzero(&msg, sizeof(msg));
             // free(msg);
@@ -1091,7 +1322,7 @@ void run_server(int server_port, int number_job_thread) {
     // update audit log
     P(&audit_mutex);
     audit_fp = fopen(audit_log, "a");
-    fprintf(audit_fp, "\n%ld\tInitializes server, listening on port: %d\n", time(NULL), server_port);
+    fprintf(audit_fp, "\n%ld\tServer initializes, listening on port: %d\n", time(NULL), server_port);
     fclose(audit_fp);
     V(&audit_mutex);
 
@@ -1132,9 +1363,9 @@ void run_server(int server_port, int number_job_thread) {
     for(int i = 0; i < number_job_thread; i++){
         pthread_create(&tid, NULL, job_thread, NULL);
         job_thread_array[i] = tid;
-        printf("create job thread: %ld\n", job_thread_array[i]);
+        //printf("create job thread: %ld\n", job_thread_array[i]);
 
-        fprintf(audit_fp, "%ld\tCreate job thread #%d\n", time(NULL), i);
+        fprintf(audit_fp, "%ld\tJob thread %ld created\n", time(NULL), tid);
     }
     fclose(audit_fp);
     V(&audit_mutex);
@@ -1182,8 +1413,7 @@ void run_server(int server_port, int number_job_thread) {
             // update audit log
             P(&audit_mutex);
             audit_fp = fopen(audit_log, "a");
-            fprintf(audit_fp, "%ld\tReceive message from client on main thread\n\t\t\t" \
-                              "msg_type: 0x%x\tmsg_body: %s\n", time(NULL),login_header.msg_type, client_name);
+            fprintf(audit_fp, "%ld\tMain thread receives login request from client\n", time(NULL));
             fclose(audit_fp);
             V(&audit_mutex);
 
@@ -1230,7 +1460,7 @@ void run_server(int server_port, int number_job_thread) {
                 P(&audit_mutex);
                 audit_fp = fopen(audit_log, "a");
                 fprintf(audit_fp, "%ld\tClient successfully logged in\n\t\t\t" \
-                        "Username: %s\tUserFD: %d\n", time(NULL), client_name, *client_fd);
+                        "Username: %s,\tUserFD: %d\n", time(NULL), client_name, *client_fd);
                 fclose(audit_fp);
                 V(&audit_mutex);
 
@@ -1259,7 +1489,7 @@ void run_server(int server_port, int number_job_thread) {
                 // update audit log
                 P(&audit_mutex);
                 audit_fp = fopen(audit_log, "a");
-                fprintf(audit_fp, "%ld\tCreate client thread for user\n", time(NULL));
+                fprintf(audit_fp, "%ld\tClient thread %ld created for user\n", time(NULL), tid);
                 fclose(audit_fp);
                 V(&audit_mutex);
             }
