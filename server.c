@@ -1382,16 +1382,13 @@ void run_server(int server_port, int number_job_thread) {
          */
         client_fd = malloc(sizeof(int));
         *client_fd = accept(listen_fd, (SA *)&client_addr, &client_addr_len);
-        printf("*client_fd is %d\n", *client_fd);
 
         /* Condition when connection is failed, check by return value of accept */
         if (*client_fd < 0) {
             printf("server acccept failed\n");
             exit(EXIT_FAILURE);
 
-        // accept now connection
         } else {
-            printf("New client connetion accepted\n");
 
             /* read the message header from the new client
              * login_header is petr_header struct
@@ -1428,8 +1425,6 @@ void run_server(int server_port, int number_job_thread) {
                 node_t* current = users_list.head;
                 while(current != NULL){
                     /* send error message back to client if username already exists
-                     * is it necessary to use strcmp or strncmp instead of logical
-                     * operator equal ?
                      */
                     if(strcmp( ((char*)(current->value)), client_name ) == 0){
                         user_exist = 1;
@@ -1464,14 +1459,6 @@ void run_server(int server_port, int number_job_thread) {
                 fclose(audit_fp);
                 V(&audit_mutex);
 
-                // (for testing) print out the linked list
-                current = users_list.head;
-                while(current != NULL){
-                    printf("user: %s\t", (char*)(current->value));
-                    printf("fd: %d\n", (current->fd));
-                    current = current->next;
-                }
-
                 V(&users_mutex);
 
                 // write message back to client to confirm login
@@ -1482,6 +1469,15 @@ void run_server(int server_port, int number_job_thread) {
                     printf("Sending failed\n");
                     exit(EXIT_FAILURE);
                 }
+
+                // update audit log
+                P(&audit_mutex);
+                audit_fp = fopen(audit_log, "a");
+                fprintf(audit_fp, "%ld\tClient thread %ld sends message to client fd %d\n\t\t\t" \
+                        "Header Type: 0x%x,\tHeader Length: %d\n\t\t\t"
+                        "Message Body: %s\n", time(NULL), pthread_self(), *client_fd, reply_header.msg_type, reply_header.msg_len, "");
+                fclose(audit_fp);
+                V(&audit_mutex);
 
                 // after login successfully, create a client thread
                 pthread_create(&tid, NULL, process_client, (void *)client_fd);
