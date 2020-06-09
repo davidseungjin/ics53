@@ -1,6 +1,6 @@
 /*
- * Team# 110
- * Team member      /   member's UCInetID
+ * Group# 110
+ * Group member     /   member's UCInetID
  * Huikang Huang    /   huikangh
  * Seungjin Lee     /   seungl21
  *
